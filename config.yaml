@@ -1,0 +1,31 @@
+llm:
+  max_tokens: 4096
+  batch_size: 64
+  max_concurrent: 32
+
+paths:
+  server_cache: cache/server
+  mod_cache: cache/mod
+  gkm_diff: cache/gkm-diff
+  output: output
+
+github:
+  owner: chinosk6
+  repo: GakumasTranslationData
+
+character_names:
+  amao: 有村麻央
+  hski: 花海咲季
+  hume: 花海佑芽
+  fktn: 藤田琴音
+  kllj: 葛城莉莉娅
+  hrnm: 姫崎莉波
+  shro: 広
+  ssmk: 紫雲清夏
+  ttmr: 月村手毬
+  kcna: 倉本千奈
+  hmsz: 秦谷美鈴
+  atbm: 雨夜燕
+  jsna: 十王星南
+  cmmn: ""
+  "{user}": "{user}"
