@@ -1,7 +1,7 @@
 import sys, json, urllib.request, zipfile, io, subprocess
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from lib.octo import download_octo_list, download_adv_txts
+from lib.octo import download_octo_list, load_octo_cache, download_adv_txts
 
 CACHE = Path("cache")
 SERVER = CACHE / "server"
@@ -13,8 +13,14 @@ def main():
     SERVER.mkdir(parents=True, exist_ok=True)
     MOD.mkdir(parents=True, exist_ok=True)
 
-    print("[1/3] Downloading Octo list...")
-    octo_list = download_octo_list()
+    print("[1/3] Loading Octo resources...")
+    cache_path = Path(__file__).parent.parent / "octocacheevai"
+    octo_list = load_octo_cache(cache_path)
+    if octo_list:
+        print(f"  Using local octocacheevai (revision {octo_list['revision']})")
+    else:
+        print("  No octocacheevai found, using API...")
+        octo_list = download_octo_list()
     (SERVER / "octo_index.json").write_text(json.dumps(octo_list, ensure_ascii=False), encoding="utf-8")
 
     print("[2/3] Downloading adv TXT files...")

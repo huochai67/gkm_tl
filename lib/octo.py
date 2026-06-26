@@ -10,6 +10,10 @@ OCTO_ENDPOINT = "https://api.asset.game-gakuen-idolmaster.jp/v2/pub/a/400/v/2050
 OCTO_API_KEY = b"eSquJySjayO5OLLVgdTd"
 X_OCTO_KEY = "0jv0wsohnnsigttbfigushbtl3a8m7l5"
 
+# HatsuboshiToolkit keys for decrypting local octocacheevai
+OCTO_CACHE_KEY = bytes.fromhex("9d8dfd7b1371612846f7ba44e01af160")
+OCTO_CACHE_IV = bytes.fromhex("1c6e6f9255c0e5412712f4010225e378")
+
 _HTTP_OPTIONS = {"maxsize": 32, "cert_reqs": "CERT_NONE", "assert_hostname": False}
 _DIRECT_HTTP = urllib3.PoolManager(**_HTTP_OPTIONS)
 
@@ -76,6 +80,34 @@ def download_octo_list() -> dict:
                     elif fn == 11 and ft == "bytes": e["objectName"] = fv.decode(errors="replace")
             if e["name"]: resources.append(e)
 
+    return {"revision": top.get(1, [("varint", 0)])[0][1], "urlFormat": url_format, "resources": resources}
+
+def _parse_octo_entries(top, field_num):
+    entries = []
+    for t, v in top.get(field_num, []):
+        if t == "bytes":
+            f, _ = _parse_proto(v, 0)
+            e = {"name": "", "objectName": ""}
+            for fn, fvs in f.items():
+                for ft, fv in fvs:
+                    if fn == 3 and ft == "bytes": e["name"] = fv.decode(errors="replace")
+                    elif fn == 11 and ft == "bytes": e["objectName"] = fv.decode(errors="replace")
+            if e["name"]: entries.append(e)
+    return entries
+
+def load_octo_cache(cache_path: Path) -> dict | None:
+    if not cache_path.exists():
+        return None
+    data = cache_path.read_bytes()
+    cipher = Cipher(algorithms.AES(OCTO_CACHE_KEY), modes.CBC(OCTO_CACHE_IV))
+    pt = cipher.decryptor().update(data[1:]) + cipher.decryptor().finalize()
+    pad_len = pt[-1]
+    pt = pt[:-pad_len]
+    top, _ = _parse_proto(pt, 16)
+    url_format = ""
+    for t, v in top.get(5, []):
+        if t == "bytes": url_format = v.decode()
+    resources = _parse_octo_entries(top, 2) + _parse_octo_entries(top, 4)
     return {"revision": top.get(1, [("varint", 0)])[0][1], "urlFormat": url_format, "resources": resources}
 
 def download_adv_txts(octo_list: dict, dest_dir: Path, workers: int = 32):
