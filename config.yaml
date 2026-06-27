@@ -29,3 +29,13 @@ character_names:
   jsna: 十王星南
   cmmn: ""
   "{user}": "{user}"
+
+octo:
+  app_id: 400
+  client_secret: 0jv0wsohnnsigttbfigushbtl3a8m7l5
+  version: "705100"
+  url: https://api.asset.game-gakuen-idolmaster.jp/
+  api_key_seed: x5HFaJCJywDyuButLM0f
+  cache_key: 9d8dfd7b1371612846f7ba44e01af160
+  cache_iv: 1c6e6f9255c0e5412712f4010225e378
+  data_path: cache/octo

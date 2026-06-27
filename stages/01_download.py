@@ -1,7 +1,8 @@
 import sys, json, urllib.request, zipfile, io, subprocess
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from lib.octo import download_octo_list, load_octo_cache, download_adv_txts
+from lib.octo import OctoClient
+from lib.config import load_config
 
 CACHE = Path("cache")
 SERVER = CACHE / "server"
@@ -14,17 +15,32 @@ def main():
     MOD.mkdir(parents=True, exist_ok=True)
 
     print("[1/3] Loading Octo resources...")
-    cache_path = Path(__file__).parent.parent / "octocacheevai"
-    octo_list = load_octo_cache(cache_path)
-    if octo_list:
-        print(f"  Using local octocacheevai (revision {octo_list['revision']})")
+    config = load_config()
+    client = OctoClient(config.get("octo", {}))
+
+    db = client.load_local_db()
+    if db:
+        print(f"  Using local database cache (revision {db.revision})")
     else:
-        print("  No octocacheevai found, using API...")
-        octo_list = download_octo_list()
-    (SERVER / "octo_index.json").write_text(json.dumps(octo_list, ensure_ascii=False), encoding="utf-8")
+        cache_path = Path(__file__).parent.parent / "octocacheevai"
+        db = client.load_octo_cache(cache_path)
+        if db:
+            print(f"  Using local octocacheevai (revision {db.revision})")
+        else:
+            print("  No local cache found, fetching from API...")
+            db = client.fetch_database()
+            client.save_local_db(db)
+            print(f"  Fetched from API (revision {db.revision})")
+
+    octo_index = {
+        "revision": db.revision,
+        "urlFormat": db.urlFormat,
+        "resources": [{"name": r.name, "objectName": r.objectName} for r in db.resourceList],
+    }
+    (SERVER / "octo_index.json").write_text(json.dumps(octo_index, ensure_ascii=False), encoding="utf-8")
 
     print("[2/3] Downloading adv TXT files...")
-    count = download_adv_txts(octo_list, SERVER / "res_raw")
+    count = client.download_adv_txts(db, SERVER / "res_raw")
     print(f"  {count} files", flush=True)
 
     print("[3/3] Checking GitHub release...")

@@ -9,4 +9,5 @@ dependencies = [
     "ruamel.yaml>=0.18.0",
     "requests>=2.34.2",
     "urllib3>=2.7.0",
+    "protobuf>=4.25.0",
 ]
