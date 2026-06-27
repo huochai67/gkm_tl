@@ -4,11 +4,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 import urllib3
 from google.protobuf.json_format import MessageToDict, ParseDict
-
-_HATSU_PATH = str(Path(__file__).resolve().parent.parent / "HatsuboshiToolkit")
-if _HATSU_PATH not in sys.path:
-    sys.path.insert(0, _HATSU_PATH)
-import proto.octodb_pb2 as octop
+from lib.proto import octodb_pb2 as octop
 
 urllib3.disable_warnings()
 
