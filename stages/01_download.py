@@ -1,4 +1,4 @@
-import sys, json, urllib.request, zipfile, io, subprocess
+import sys, json, urllib.request, zipfile, io
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from lib.octo import OctoClient
@@ -63,11 +63,24 @@ def main():
         mod_version_file.write_text(tag)
         print(f"  Extracted to {MOD}", flush=True)
 
-    if not (GKM_DIFF / ".git").exists():
-        print("[3b/3] Cloning gakumasu-diff...")
-        subprocess.run(["git", "clone", "https://github.com/vertesan/gakumasu-diff.git", str(GKM_DIFF)], check=True)
+    if not GKM_DIFF.exists():
+        print("[3b/3] Downloading gakumasu-diff...")
+        zip_url = "https://github.com/vertesan/gakumasu-diff/archive/refs/heads/master.zip"
+        req = urllib.request.Request(zip_url)
+        resp = urllib.request.urlopen(req, timeout=120)
+        z = zipfile.ZipFile(io.BytesIO(resp.read()))
+        tmp = GKM_DIFF.parent / (GKM_DIFF.name + ".tmp")
+        if tmp.exists():
+            import shutil
+            shutil.rmtree(tmp)
+        z.extractall(tmp)
+        root_dirs = list(tmp.iterdir())
+        if len(root_dirs) == 1:
+            root_dirs[0].rename(GKM_DIFF)
+            tmp.rmdir()
+        print(f"  Extracted to {GKM_DIFF}", flush=True)
     else:
-        print("  gakumasu-diff already cloned")
+        print("  gakumasu-diff already downloaded")
 
 
 if __name__ == "__main__":
