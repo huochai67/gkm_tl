@@ -45,7 +45,10 @@ def _apply_master(fname: str, items: list) -> int:
     for item in items:
         record = records_by_id.get(item["record_id"])
         if record is not None:
-            record[item["field"]] = item.get("cn", item.get("existing_cn", ""))
+            cn = item.get("cn") or item.get("existing_cn") or ""
+            if not cn:
+                continue
+            record[item["field"]] = cn
             count += 1
     fp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     return count
@@ -64,7 +67,10 @@ def _apply_generic(items: list) -> int:
         changed = False
         for item in file_items:
             if item["field"] in data:
-                data[item["field"]] = item.get("cn", item.get("existing_cn", ""))
+                cn = item.get("cn") or item.get("existing_cn") or ""
+                if not cn:
+                    continue
+                data[item["field"]] = cn
                 count += 1
                 changed = True
         if changed:
@@ -116,7 +122,10 @@ def _apply_localization(items: list) -> int:
     data = json.loads(fp.read_text(encoding="utf-8"))
     count = 0
     for item in items:
-        if _set_path(data, item["field"], item.get("cn", item.get("existing_cn", ""))):
+        cn = item.get("cn") or item.get("existing_cn") or ""
+        if not cn:
+            continue
+        if _set_path(data, item["field"], cn):
             count += 1
     fp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return count

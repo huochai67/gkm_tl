@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from lib.text_utils import contains_japanese
+from lib.text_utils import contains_japanese, looks_like_japanese_source
 
 def _flatten_json(data, prefix="", results=None):
     if results is None: results = {}
@@ -20,14 +20,18 @@ def extract_localization_text(mod_file: Path) -> list[dict]:
     flat = _flatten_json(data)
     results = []
     for key, val in flat.items():
-        if contains_japanese(val):
-            results.append({
-                "uid": f"localization:{key}",
-                "category": "localization",
-                "file": "localization.json",
-                "field": key,
-                "jp": val,
-                "existing_cn": "",
-                "status": "existing",
-            })
+        if not isinstance(val, str) or not contains_japanese(val):
+            continue
+        # Keep current value as fallback so build never overwrites with empty.
+        # Only mark true JP source strings as new for LLM translation.
+        status = "new" if looks_like_japanese_source(val) else "existing"
+        results.append({
+            "uid": f"localization:{key}",
+            "category": "localization",
+            "file": "localization.json",
+            "field": key,
+            "jp": val,
+            "existing_cn": val,
+            "status": status,
+        })
     return results
