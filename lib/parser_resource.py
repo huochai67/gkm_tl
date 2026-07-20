@@ -90,17 +90,48 @@ def extract_resource_text(filepath: Path) -> list[dict]:
                 results.append({"line": line_no, "command": "choice", "field": f"text[{ci}]", "jp": ct})
     return results
 
+_RE_CHOICE_TEXT = re.compile(r"text=(.*?)(?=\s+(?:text=|[a-zA-Z_]\w*=)|$)")
+
+
+def _replace_choice_texts(body: str, translations: dict[int, str]) -> str:
+    """Insert translations for indexed choicegroup text values in one pass."""
+    index = 0
+
+    def replace(match: re.Match) -> str:
+        nonlocal index
+        jp = match.group(1)
+        cn = translations.get(index)
+        index += 1
+        return f"text=<r\\={jp}>{cn}</r\\>" if cn else match.group(0)
+
+    return _RE_CHOICE_TEXT.sub(replace, body)
+
+
 def build_resource_line(orig_line: str, translations: dict[str, str]) -> str:
     cmd_m = re.match(r"(\[\w+\s+)(.*)(\])", orig_line.strip())
     if not cmd_m: return orig_line
     prefix, body, suffix = cmd_m.group(1), cmd_m.group(2), cmd_m.group(3)
     kv = _extract_all_kv(body)
+
+    indexed = {}
+    plain = {}
     for field, cn in translations.items():
-        if field.startswith("text"):
+        m = re.match(r"text\[(\d+)\]$", field)
+        if m:
+            indexed[int(m.group(1))] = cn
+        else:
+            plain[field] = cn
+
+    if indexed:
+        body = _replace_choice_texts(body, indexed)
+
+    for field, cn in plain.items():
+        if field == "text" and cn:
             jp = kv.get("text", "")
-            old = f"text={jp}"
-            new = f"text=<r\\={jp}>{cn}</r\\>"
-            body = body.replace(old, new, 1)
+            if jp:
+                old = f"text={jp}"
+                new = f"text=<r\\={jp}>{cn}</r\\>"
+                body = body.replace(old, new, 1)
         elif field == "name" and cn:
             old = f"name={kv.get('name', '')}"
             new = f"name={cn}"
