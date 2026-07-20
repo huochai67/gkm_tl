@@ -1,0 +1,146 @@
+import importlib.util
+import io
+import json
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+from types import SimpleNamespace
+
+import lib.octo as octo_module
+from lib.octo import OctoClient
+from lib.parser_localization import extract_localization_text
+from lib.parser_master import extract_master_text
+from lib.parser_resource import build_resource_line
+from lib.proto import octodb_pb2 as octop
+from lib.text_utils import looks_like_japanese_source
+
+
+PROJECT_ROOT = Path(__file__).parent.parent
+
+
+def _load_stage(name: str):
+    path = PROJECT_ROOT / "stages" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name.replace("-", "_"), path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class ResourceRegressionTests(unittest.TestCase):
+    def test_build_replaces_every_choicegroup_text(self):
+        line = "[choicegroup text=選択肢1 text=選択肢2 text=選択肢3]"
+
+        built = build_resource_line(
+            line,
+            {"text[0]": "选项1", "text[1]": "选项2", "text[2]": "选项3"},
+        )
+
+        self.assertEqual(
+            built,
+            "[choicegroup text=<r\\=選択肢1>选项1</r\\> "
+            "text=<r\\=選択肢2>选项2</r\\> "
+            "text=<r\\=選択肢3>选项3</r\\>]",
+        )
+
+    def test_resource_translation_split_detects_source_change(self):
+        extract = _load_stage("02_extract")
+        self.assertEqual(
+            extract._split_resource_translation("<r\\=旧原文>旧译文</r\\>"),
+            ("旧原文", "旧译文"),
+        )
+        self.assertEqual(extract._split_resource_translation("plain"), ("plain", ""))
+
+
+class LocalizationRegressionTests(unittest.TestCase):
+    def test_japanese_localization_is_translated_and_chinese_is_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "localization.json"
+            path.write_text(
+                json.dumps({"jp": "みんなありがとう", "cn": "大家好"}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            items = extract_localization_text(path)
+
+        self.assertEqual(items[0]["status"], "new")
+        self.assertEqual(items[0]["existing_cn"], "みんなありがとう")
+        self.assertEqual(items[1]["status"], "existing")
+        self.assertEqual(items[1]["existing_cn"], "大家好")
+        self.assertTrue(looks_like_japanese_source("みんな"))
+        self.assertFalse(looks_like_japanese_source("大家好"))
+
+
+class MasterRegressionTests(unittest.TestCase):
+    def test_master_snapshot_detects_changed_source_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            yaml_dir = root / "yaml"
+            mod_dir = root / "mod"
+            yaml_dir.mkdir()
+            mod_dir.mkdir()
+            (yaml_dir / "sample.yaml").write_text("- id: 1\n  name: 新原文\n", encoding="utf-8")
+            (mod_dir / "sample.json").write_text(
+                json.dumps({"data": [{"id": 1, "name": "旧译文"}]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            snapshot = root / "snapshot.json"
+            snapshot.write_text(
+                json.dumps({"master:sample:0:1:name": "旧原文"}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            item = extract_master_text(yaml_dir, mod_dir, snapshot)[0]
+
+        self.assertEqual(item["status"], "changed")
+
+
+class DownloadRegressionTests(unittest.TestCase):
+    def test_failed_asset_is_not_cached_and_is_retried(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = OctoClient({"data_path": str(root / "octo")})
+            database = octop.Database(urlFormat="https://assets/{o}")
+            resource = database.resourceList.add()
+            resource.name = "adv_test.txt"
+            resource.objectName = "test"
+
+            original_request = octo_module._http_request
+            try:
+                octo_module._http_request = lambda *args, **kwargs: SimpleNamespace(
+                    status=500, data=b"error", release_conn=lambda: None
+                )
+                client.download_adv_txts(database, root / "res")
+                log = json.loads((root / "download_log.json").read_text(encoding="utf-8"))
+                self.assertNotIn("adv_test.txt", log)
+                self.assertFalse((root / "res" / "adv_test.txt").exists())
+
+                octo_module._http_request = lambda *args, **kwargs: SimpleNamespace(
+                    status=200, data=b"ok", release_conn=lambda: None
+                )
+                client.download_adv_txts(database, root / "res")
+            finally:
+                octo_module._http_request = original_request
+
+            log = json.loads((root / "download_log.json").read_text(encoding="utf-8"))
+            self.assertEqual(log["adv_test.txt"], "ok")
+            self.assertEqual((root / "res" / "adv_test.txt").read_bytes(), b"ok")
+
+    def test_zip_cache_replacement_removes_old_files(self):
+        download = _load_stage("01_download")
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "cache"
+            destination.mkdir()
+            (destination / "old.txt").write_text("old", encoding="utf-8")
+            content = io.BytesIO()
+            with zipfile.ZipFile(content, "w") as archive:
+                archive.writestr("source/new.txt", "new")
+
+            download._extract_zip_atomically(content.getvalue(), destination)
+
+            self.assertEqual((destination / "new.txt").read_text(encoding="utf-8"), "new")
+            self.assertFalse((destination / "old.txt").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

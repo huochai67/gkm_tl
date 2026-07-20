@@ -2,12 +2,12 @@
 
 《学园偶像大师》(Gakuen iDOLM@STER) 游戏文本自动翻译工具。
 
-从游戏服务器获取最新日文资源，对比现有中文翻译模版，调用 LLM 翻译新增/变更内容，输出可直接使用的翻译资源包。
+从游戏服务器获取最新日文资源，对比现有中文翻译模版，调用 LLM 翻译新增或变更内容，输出可直接使用的翻译资源包。
 
 ## 功能
 
 - **自动下载** — 从 Octo 服务器下载冒险脚本，从 GitHub 获取现有翻译模版和 master 数据
-- **增量对比** — 精确对比服务器原文与模版已有翻译，仅翻译 `new` / `changed` 条目，避免重复工作
+- **增量对比** — resource 比较嵌入的日文原文，Master 使用源文本快照识别变更，仅翻译 `new` / `changed` 条目
 - **LLM 翻译** — 支持 OpenAI 兼容 API，可配置模型、批量大小、并发数
 - **四类文本全覆盖** — 冒险脚本 (resource)、master 数据、generic JSON、localization JSON
 - **角色名自动替换** — 内置 15 名偶像的中文名映射，自动替换对话中的角色名
@@ -43,7 +43,7 @@ uv sync
 ### 配置
 
 ```bash
-cp config.yaml.example config.yaml
+Copy-Item config.yaml.example config.yaml
 ```
 
 编辑 `config.yaml`，填入 LLM 的 `base_url`、`api_key`、`model`：
@@ -56,6 +56,8 @@ llm:
   batch_size: 20
   max_concurrent: 5
 ```
+
+也可通过 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`、`LLM_BACKEND`、`LLM_BATCH_SIZE`、`LLM_MAX_CONCURRENT` 和 `LLM_TIMEOUT` 覆盖对应的 `llm` 配置。环境变量优先于配置文件。
 
 ### 运行
 
@@ -83,9 +85,9 @@ uv run python stages/05_package.py
 |------|------|------|
 | Octo 服务器 | `adv_*.txt` 冒险脚本 | HTTPS 请求 + AES-CBC 解密 |
 | GitHub Release | 现有中文翻译模版 | GitHub API 下载 zip |
-| gakumasu-diff (git) | master 数据 YAML | `git clone` |
+| gakumasu-diff | master 数据 YAML | GitHub ZIP 下载 |
 
-支持断点续传和增量下载。
+每次运行会刷新 Octo 索引和 `gakumasu-diff`；刷新失败时回退到已有本地缓存。资源下载仅记录成功文件，失败文件会在下次运行重试。
 
 ### Stage 2: 提取
 
@@ -96,7 +98,7 @@ uv run python stages/05_package.py
 - **`parser_generic`** — 解析 `genericTrans/**/*.json` 的 key-value
 - **`parser_localization`** — 深度遍历 `localization.json` 的所有叶子字符串
 
-对比以 `(file, line, field)` 为唯一标识，标记每条记录为 `new` / `existing` / `changed`。
+对比以 `(file, line, field)` 为唯一标识，标记每条记录为 `new` / `existing` / `changed`：没有现有译文为 `new`，原文未变为 `existing`，原文变更为 `changed`。
 
 ### Stage 3: 翻译
 
@@ -120,7 +122,7 @@ uv run python stages/05_package.py
 
 ```
 gkm-tl/
-├── config.yaml.example      # 配置模版
+├── config.yaml.example      # 可提交的配置模版
 ├── pyproject.toml           # 项目元数据 & 依赖
 ├── run.py                   # 流水线调度入口
 ├── lib/

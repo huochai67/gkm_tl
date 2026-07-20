@@ -7,14 +7,14 @@
 
 ## 架构
 
-### 四阶段流水线
+### 五阶段流水线
 
 ```
-01_download.py    02_extract.py     03_translate.py     04_build.py
-      │                │                  │                  │
-      ▼                ▼                  ▼                  ▼
+01_download.py    02_extract.py     03_translate.py     04_build.py     05_package.py
+      │                │                  │                  │                │
+      ▼                ▼                  ▼                  ▼                ▼
   服务器 Octo     统一提取为          LLM 批量翻译      重建完整目录
-  GitHub Release  extract.json       → translated.json  → output/
+   GitHub Release  extract.json       → translated.json  → output/         → zip
       │                │                  │                  │
       ▼                ▼                  ▼                  ▼
   cache/            extract.json     translated.json     output/
@@ -50,13 +50,13 @@
 |---|---|---|
 | 游戏服务器 Octo Resources | adv_*.txt (3697 个冒险脚本) | octo API，无需认证 |
 | GitHub Release | GakumasTranslationData.zip | GitHub API |
-| gakumasu-diff (git clone) | master 数据 YAML | `git clone` |
+| gakumasu-diff | master 数据 YAML | GitHub ZIP 下载 |
 
 ### 流程
 
 1. GitHub API 检查最新 release tag
 2. 若 `mod/version.txt` 版本号不同，下载 zip 解压到 `cache/mod/`
-3. Git clone gakumasu-diff 到 `cache/gkm-diff/`
+3. 下载并原子替换 `gakumasu-diff` 缓存到 `cache/gkm-diff/`
 4. 从 Octo 下载最新 adv TXT（增量下载，断点续传）
 5. 记录下载日志
 
@@ -85,9 +85,10 @@
 ### 对比策略
 
 - 以 `(file, line, field)` 为唯一标识
-- 服务器/模版都有且值一致 → `existing`
-- 服务器有但模版无 → `new`
-- 服务器有但模版值不同 → `changed`
+- 没有现有译文 → `new`
+- resource 嵌入的日文原文与服务器值一致 → `existing`
+- resource 嵌入的日文原文与服务器值不同 → `changed`
+- Master 使用上一次构建成功后记录的源文本快照；快照不同 → `changed`
 - 模版有但服务器无 → 忽略（已删除的资源）
 
 ## Stage 3: 翻译
@@ -162,6 +163,11 @@ output/GakumasTranslationData/
 - `resource/*.txt`: 替换 `text=日文原文` → `text=<r\=日文原文>中文翻译</r\>`（与现有模版格式完全一致，同时保留日文原文和中文翻译）
 - `message` 中的 `name=` 字段: 查角色名映射表替换为中文名
 - 其他 JSON: 直接替换对应字段的值为中文翻译
+- 空译文不会覆盖已有值
+
+## Stage 5: 压缩
+
+将 `output/GakumasTranslationData/` 压缩为 `output/GakumasTranslationData.zip`。ZIP 根目录直接包含 `version.txt` 和 `local-files/`。
 
 ## 配置 (config.yaml)
 
@@ -188,14 +194,15 @@ paths:
 
 ```
 gkm-tl/
-├── config.yaml.example
+├── config.yaml.example                 # 可提交配置模版
 ├── run.py                          # Orchestrator
 ├── stages/
 │   ├── __init__.py
 │   ├── 01_download.py              # 下载所有原始资源
 │   ├── 02_extract.py               # 提取并对比
 │   ├── 03_translate.py             # LLM 翻译
-│   └── 04_build.py                 # 打包输出
+│   ├── 04_build.py                 # 打包输出
+│   └── 05_package.py               # 压缩发布包
 ├── lib/
 │   ├── __init__.py
 │   ├── octo.py                     # Octo API 交互
