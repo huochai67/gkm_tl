@@ -8,6 +8,15 @@ from lib.parser_localization import extract_localization_text
 from lib.config import load_config
 
 CACHE = Path("cache")
+_RE_RESOURCE_TRANSLATION = re.compile(r"^<r\\=(.*?)>(.*?)</r\\>$")
+
+
+def _split_resource_translation(value: str) -> tuple[str, str]:
+    """Return the source Japanese and Chinese from a mod text value."""
+    match = _RE_RESOURCE_TRANSLATION.match(value)
+    if match:
+        return match.group(1), match.group(2)
+    return value, ""
 
 
 def main():
@@ -44,16 +53,18 @@ def main():
         for item in server_items:
             key = (item["line"], item["field"])
             existing = ""
+            old_jp = ""
             if key in mod_items:
-                mod_val = mod_items[key]
-                cn_m = re.search(r">([^<]+)</r>", mod_val)
-                if cn_m:
-                    existing = cn_m.group(1)
+                old_jp, existing = _split_resource_translation(mod_items[key])
             item["uid"] = f"{name}:{item['line']}:{item['field']}"
             item["file"] = f"{name}.txt"
             item["category"] = "resource"
             item["existing_cn"] = existing
-            item["status"] = "existing" if existing else "new"
+            item["status"] = (
+                "changed" if existing and old_jp != item["jp"]
+                else "existing" if existing
+                else "new"
+            )
 
             if item["field"] == "text":
                 item["speaker"] = speaker_map.get(item["line"], "")
@@ -72,7 +83,11 @@ def main():
             all_items.append(item)
 
     print("  parsing master data...", flush=True)
-    all_items += extract_master_text(master_dir, mod_master)
+    all_items += extract_master_text(
+        master_dir,
+        mod_master,
+        CACHE / "master_source_snapshot.json",
+    )
     print("  parsing generic data...", flush=True)
     all_items += extract_generic_text(mod_generic)
     print("  parsing localization data...", flush=True)

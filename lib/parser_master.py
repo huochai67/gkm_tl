@@ -5,8 +5,15 @@ from lib.text_utils import contains_japanese
 
 yaml_loader = YAML(typ='safe')
 
-def extract_master_text(yaml_dir: Path, mod_master_dir: Path) -> list[dict]:
+def extract_master_text(
+    yaml_dir: Path,
+    mod_master_dir: Path,
+    source_snapshot_path: Path | None = None,
+) -> list[dict]:
     results = []
+    source_snapshot = {}
+    if source_snapshot_path and source_snapshot_path.exists():
+        source_snapshot = json.loads(source_snapshot_path.read_text(encoding="utf-8"))
     yaml_files = sorted(yaml_dir.glob("*.yaml"))
     mod_files = {}
     if mod_master_dir.exists():
@@ -40,9 +47,15 @@ def extract_master_text(yaml_dir: Path, mod_master_dir: Path) -> list[dict]:
                     existing_cn = ""
                     if rec_id in existing and key in existing[rec_id]:
                         existing_cn = existing[rec_id][key]
-                    status = "existing" if existing_cn else "new"
+                    uid = f"master:{name}:{rec_idx}:{uid_id}:{key}"
+                    previous_jp = source_snapshot.get(uid)
+                    status = (
+                        "changed" if existing_cn and previous_jp is not None and previous_jp != val
+                        else "existing" if existing_cn
+                        else "new"
+                    )
                     results.append({
-                        "uid": f"master:{name}:{rec_idx}:{uid_id}:{key}",
+                        "uid": uid,
                         "category": "master",
                         "file": f"{name}.json",
                         "record_id": rec_id,

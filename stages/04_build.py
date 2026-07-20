@@ -10,6 +10,7 @@ MOD = CACHE / "mod"
 SERVER_RES = CACHE / "server" / "res_raw"
 OUT = Path("output") / "GakumasTranslationData"
 OUT_RL = OUT / "local-files" / "resource"
+MASTER_SOURCE_SNAPSHOT = CACHE / "master_source_snapshot.json"
 
 def _build_resource(fname: str, items: list) -> str | None:
     server_fp = SERVER_RES / fname
@@ -130,6 +131,19 @@ def _apply_localization(items: list) -> int:
     fp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return count
 
+
+def _save_master_source_snapshot(items: list) -> None:
+    """Record source text only after its translated output has been built."""
+    snapshot = {}
+    if MASTER_SOURCE_SNAPSHOT.exists():
+        snapshot = json.loads(MASTER_SOURCE_SNAPSHOT.read_text(encoding="utf-8"))
+    for item in items:
+        if item.get("cn"):
+            snapshot[item["uid"]] = item["jp"]
+    MASTER_SOURCE_SNAPSHOT.write_text(
+        json.dumps(snapshot, ensure_ascii=False, indent=1), encoding="utf-8"
+    )
+
 def main():
     translations = json.loads((CACHE / "translated.json").read_text(encoding="utf-8"))
 
@@ -166,6 +180,7 @@ def main():
         futures = {exc.submit(_apply_master, fname, items): fname for fname, items in master_by_file.items()}
         for fut in as_completed(futures):
             fut.result()
+    _save_master_source_snapshot(master_items)
 
     print(f"  Applying {len(generic_items)} generic translations...", flush=True)
     _apply_generic(generic_items)
