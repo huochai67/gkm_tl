@@ -2,7 +2,7 @@ import sys, json, shutil, tempfile, urllib.request, zipfile, io
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from lib.octo import OctoClient
-from lib.config import load_config
+from lib.config import load_config, resolve_paths
 
 CACHE = Path("cache")
 SERVER = CACHE / "server"
@@ -44,11 +44,16 @@ def _download(url: str, timeout: int) -> bytes:
 
 
 def main():
+    global SERVER, MOD, GKM_DIFF
+    config = load_config()
+    paths = resolve_paths(config)
+    SERVER = paths["server_cache"]
+    MOD = paths["mod_cache"]
+    GKM_DIFF = paths["gkm_diff"]
     SERVER.mkdir(parents=True, exist_ok=True)
     MOD.mkdir(parents=True, exist_ok=True)
 
     print("[1/3] Loading Octo resources...")
-    config = load_config()
     client = OctoClient(config.get("octo", {}))
 
     refreshed = False
@@ -82,7 +87,10 @@ def main():
     print(f"  {count} files", flush=True)
 
     print("[3/3] Checking GitHub release...")
-    github_api = "https://api.github.com/repos/chinosk6/GakumasTranslationData/releases/latest"
+    github = config.get("github", {})
+    owner = github.get("owner", "chinosk6")
+    repo = github.get("repo", "GakumasTranslationData")
+    github_api = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
     req = urllib.request.Request(github_api, headers={"Accept": "application/json"})
     resp = urllib.request.urlopen(req, timeout=30)
     release = json.loads(resp.read())

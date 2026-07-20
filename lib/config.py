@@ -3,6 +3,7 @@ from pathlib import Path
 from ruamel.yaml import YAML
 
 DEFAULT_CONFIG = str(Path(__file__).parent.parent / "config.yaml")
+PROJECT_ROOT = Path(__file__).parent.parent
 
 _ENV_TO_LLM = {
     "LLM_BACKEND": ("backend", str),
@@ -30,3 +31,30 @@ def load_config(path: str = DEFAULT_CONFIG) -> dict:
                 raise ValueError(f"Invalid value for {env_key}: {val!r}") from exc
     llm.setdefault("backend", "openai")
     return cfg
+
+
+def resolve_paths(config: dict) -> dict[str, Path]:
+    """Resolve configured runtime paths relative to the project root."""
+    defaults = {
+        "server_cache": "cache/server",
+        "mod_cache": "cache/mod",
+        "gkm_diff": "cache/gkm-diff",
+        "output": "output",
+    }
+    configured = config.get("paths", {})
+    paths = {}
+    for key, default in defaults.items():
+        value = Path(configured.get(key, default))
+        paths[key] = value if value.is_absolute() else PROJECT_ROOT / value
+    return paths
+
+
+def validate_llm_config(config: dict) -> None:
+    """Raise a clear error before a translation request lacks connection settings."""
+    llm = config.get("llm", {})
+    missing = [key for key in ("base_url", "api_key", "model") if not llm.get(key)]
+    if missing:
+        raise ValueError(
+            "Missing required LLM configuration: "
+            f"{', '.join(missing)}. Set them in config.yaml or via LLM_* environment variables."
+        )

@@ -3,12 +3,17 @@ import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from lib.config import load_config, resolve_paths
 
 OUT = Path("output") / "GakumasTranslationData"
 ZIP_PATH = Path("output") / "GakumasTranslationData.zip"
 
 
 def main():
+    global OUT, ZIP_PATH
+    output = resolve_paths(load_config())["output"]
+    OUT = output / "GakumasTranslationData"
+    ZIP_PATH = output / "GakumasTranslationData.zip"
     if not OUT.exists():
         raise FileNotFoundError(f"Output directory not found: {OUT}")
 

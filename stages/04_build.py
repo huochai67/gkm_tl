@@ -4,6 +4,7 @@ from datetime import date
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import sys; sys.path.insert(0, str(Path(__file__).parent.parent))
 from lib.parser_resource import build_resource_line
+from lib.config import load_config, resolve_paths
 
 CACHE = Path("cache")
 MOD = CACHE / "mod"
@@ -145,6 +146,14 @@ def _save_master_source_snapshot(items: list) -> None:
     )
 
 def main():
+    global CACHE, MOD, SERVER_RES, OUT, OUT_RL, MASTER_SOURCE_SNAPSHOT
+    paths = resolve_paths(load_config())
+    CACHE = paths["server_cache"].parent
+    MOD = paths["mod_cache"]
+    SERVER_RES = paths["server_cache"] / "res_raw"
+    OUT = paths["output"] / "GakumasTranslationData"
+    OUT_RL = OUT / "local-files" / "resource"
+    MASTER_SOURCE_SNAPSHOT = CACHE / "master_source_snapshot.json"
     translations = json.loads((CACHE / "translated.json").read_text(encoding="utf-8"))
 
     total_items = len(translations)

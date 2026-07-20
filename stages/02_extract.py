@@ -5,7 +5,7 @@ from lib.parser_resource import extract_resource_text, parse_adv_context
 from lib.parser_master import extract_master_text
 from lib.parser_generic import extract_generic_text
 from lib.parser_localization import extract_localization_text
-from lib.config import load_config
+from lib.config import load_config, resolve_paths
 
 CACHE = Path("cache")
 _RE_RESOURCE_TRANSLATION = re.compile(r"^<r\\=(.*?)>(.*?)</r\\>$")
@@ -21,12 +21,14 @@ def _split_resource_translation(value: str) -> tuple[str, str]:
 
 def main():
     config = load_config()
+    paths = resolve_paths(config)
+    cache_dir = paths["server_cache"].parent
 
-    server_res = CACHE / "server" / "res_raw"
-    mod_res = CACHE / "mod" / "local-files" / "resource"
-    master_dir = CACHE / "gkm-diff"
-    mod_master = CACHE / "mod" / "local-files" / "masterTrans"
-    mod_generic = CACHE / "mod" / "local-files" / "genericTrans"
+    server_res = paths["server_cache"] / "res_raw"
+    mod_res = paths["mod_cache"] / "local-files" / "resource"
+    master_dir = paths["gkm_diff"]
+    mod_master = paths["mod_cache"] / "local-files" / "masterTrans"
+    mod_generic = paths["mod_cache"] / "local-files" / "genericTrans"
 
     all_items = []
 
@@ -86,14 +88,14 @@ def main():
     all_items += extract_master_text(
         master_dir,
         mod_master,
-        CACHE / "master_source_snapshot.json",
+        cache_dir / "master_source_snapshot.json",
     )
     print("  parsing generic data...", flush=True)
     all_items += extract_generic_text(mod_generic)
     print("  parsing localization data...", flush=True)
-    all_items += extract_localization_text(CACHE / "mod" / "local-files" / "localization.json")
+    all_items += extract_localization_text(paths["mod_cache"] / "local-files" / "localization.json")
 
-    (CACHE / "extract.json").write_text(json.dumps(all_items, ensure_ascii=False, indent=1), encoding="utf-8")
+    (cache_dir / "extract.json").write_text(json.dumps(all_items, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"Extracted {len(all_items)} items ({sum(1 for i in all_items if i['status']=='new')} new)", flush=True)
 
 

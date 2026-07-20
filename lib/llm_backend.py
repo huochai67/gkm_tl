@@ -1,5 +1,6 @@
 import requests
 from abc import ABC, abstractmethod
+from lib.config import validate_llm_config
 
 
 class LLMBackend(ABC):
@@ -76,6 +77,7 @@ class AnthropicBackend(LLMBackend):
 
 
 def create_backend(config: dict) -> LLMBackend:
+    validate_llm_config(config)
     backend = config["llm"].get("backend", "openai")
     if backend == "openai":
         return OpenAIBackend(config["llm"])

@@ -1,11 +1,12 @@
 llm:
   backend: openai
-  base_url: ""
+  base_url: "https://api.openai.com/v1"
   api_key: ""
-  model: ""
+  model: "gpt-4o-mini"
   max_tokens: 4096
-  batch_size: 64
-  max_concurrent: 32
+  batch_size: 20
+  max_concurrent: 5
+  timeout: 180
 
 paths:
   server_cache: cache/server
@@ -34,6 +35,7 @@ character_names:
   cmmn: ""
   "{user}": "{user}"
 
+# Game resource access configuration. Keep these values synchronized with the game client.
 octo:
   app_id: 400
   client_secret: 0jv0wsohnnsigttbfigushbtl3a8m7l5

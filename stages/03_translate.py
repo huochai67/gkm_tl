@@ -2,7 +2,7 @@ import json, re, sys, time, threading, traceback
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from lib.config import load_config
+from lib.config import load_config, resolve_paths
 from lib.llm_backend import create_backend
 
 CACHE = Path("cache")
@@ -195,7 +195,12 @@ def _group_key(item: dict) -> str:
 
 # ── main ────────────────────────────────────────────────────
 def main():
+    global CACHE, CHECKPOINT, TRANSLATED
     config = _config()
+    cache_dir = resolve_paths(config)["server_cache"].parent
+    CACHE = cache_dir
+    CHECKPOINT = CACHE / "translate_checkpoint.json"
+    TRANSLATED = CACHE / "translated.json"
     extract = json.loads((CACHE / "extract.json").read_text(encoding="utf-8"))
     ckpt = _load_checkpoint()
 
