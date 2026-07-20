@@ -1,4 +1,4 @@
-import sys, json, urllib.request, zipfile, io
+import sys, json, shutil, tempfile, urllib.request, zipfile, io
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from lib.octo import OctoClient
@@ -10,6 +10,39 @@ MOD = CACHE / "mod"
 GKM_DIFF = CACHE / "gkm-diff"
 
 
+def _extract_zip_atomically(content: bytes, destination: Path) -> None:
+    """Replace a cache directory only after a zip archive fully extracts."""
+    with tempfile.TemporaryDirectory(dir=destination.parent) as temp_dir:
+        temp_root = Path(temp_dir)
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            archive.extractall(temp_root)
+        children = list(temp_root.iterdir())
+        source = children[0] if len(children) == 1 and children[0].is_dir() else temp_root
+        replacement = destination.parent / f"{destination.name}.new"
+        if replacement.exists():
+            shutil.rmtree(replacement)
+        shutil.copytree(source, replacement)
+        backup = destination.parent / f"{destination.name}.old"
+        if backup.exists():
+            shutil.rmtree(backup)
+        if destination.exists():
+            destination.replace(backup)
+        try:
+            replacement.replace(destination)
+        except Exception:
+            if backup.exists():
+                backup.replace(destination)
+            raise
+        else:
+            if backup.exists():
+                shutil.rmtree(backup)
+
+
+def _download(url: str, timeout: int) -> bytes:
+    response = urllib.request.urlopen(urllib.request.Request(url), timeout=timeout)
+    return response.read()
+
+
 def main():
     SERVER.mkdir(parents=True, exist_ok=True)
     MOD.mkdir(parents=True, exist_ok=True)
@@ -18,19 +51,24 @@ def main():
     config = load_config()
     client = OctoClient(config.get("octo", {}))
 
-    db = client.load_local_db()
-    if db:
-        print(f"  Using local database cache (revision {db.revision})")
-    else:
+    refreshed = False
+    try:
+        db = client.fetch_database()
+        client.save_local_db(db)
+        refreshed = True
+        print(f"  Refreshed from API (revision {db.revision})")
+    except Exception as error:
+        print(f"  API refresh failed: {error}")
+        db = client.load_local_db()
+    if not db:
         cache_path = Path(__file__).parent.parent / "octocacheevai"
         db = client.load_octo_cache(cache_path)
         if db:
-            print(f"  Using local octocacheevai (revision {db.revision})")
+            print(f"  Falling back to local octocacheevai (revision {db.revision})")
         else:
-            print("  No local cache found, fetching from API...")
-            db = client.fetch_database()
-            client.save_local_db(db)
-            print(f"  Fetched from API (revision {db.revision})")
+            raise RuntimeError("Octo API refresh failed and no local database cache is available")
+    elif not refreshed:
+        print(f"  Falling back to local database cache (revision {db.revision})")
 
     octo_index = {
         "revision": db.revision,
@@ -56,31 +94,19 @@ def main():
     else:
         print(f"  New version: {tag}, downloading...")
         zip_url = release["assets"][0]["browser_download_url"]
-        req2 = urllib.request.Request(zip_url)
-        resp2 = urllib.request.urlopen(req2, timeout=120)
-        z = zipfile.ZipFile(io.BytesIO(resp2.read()))
-        z.extractall(MOD)
+        _extract_zip_atomically(_download(zip_url, 120), MOD)
         mod_version_file.write_text(tag)
         print(f"  Extracted to {MOD}", flush=True)
 
-    if not GKM_DIFF.exists():
-        print("[3b/3] Downloading gakumasu-diff...")
+    try:
+        print("[3b/3] Refreshing gakumasu-diff...")
         zip_url = "https://github.com/vertesan/gakumasu-diff/archive/refs/heads/master.zip"
-        req = urllib.request.Request(zip_url)
-        resp = urllib.request.urlopen(req, timeout=120)
-        z = zipfile.ZipFile(io.BytesIO(resp.read()))
-        tmp = GKM_DIFF.parent / (GKM_DIFF.name + ".tmp")
-        if tmp.exists():
-            import shutil
-            shutil.rmtree(tmp)
-        z.extractall(tmp)
-        root_dirs = list(tmp.iterdir())
-        if len(root_dirs) == 1:
-            root_dirs[0].rename(GKM_DIFF)
-            tmp.rmdir()
+        _extract_zip_atomically(_download(zip_url, 120), GKM_DIFF)
         print(f"  Extracted to {GKM_DIFF}", flush=True)
-    else:
-        print("  gakumasu-diff already downloaded")
+    except Exception as error:
+        if not GKM_DIFF.exists():
+            raise
+        print(f"  Refresh failed; using cached gakumasu-diff: {error}", flush=True)
 
 
 if __name__ == "__main__":

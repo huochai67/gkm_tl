@@ -1,4 +1,4 @@
-import hashlib, json, sys, urllib.parse, urllib.request
+import hashlib, json, os, sys, urllib.parse, urllib.request
 from functools import lru_cache
 from pathlib import Path
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -49,11 +49,22 @@ class OctoClient:
             "X-OCTO-KEY": self.client_secret,
         }
         r = _http_request("GET", url, headers=headers)
+        if r.status < 200 or r.status >= 300:
+            r.release_conn()
+            raise RuntimeError(f"Octo database request failed: HTTP {r.status}")
+        if len(r.data) < 32:
+            r.release_conn()
+            raise RuntimeError("Octo database response is too short")
         key = hashlib.sha256(self.api_key_seed.encode()).digest()
-        cipher = Cipher(algorithms.AES(key), modes.CBC(r.data[:16])).decryptor()
-        pt = cipher.update(r.data[16:]) + cipher.finalize()
-        pt = pt[:-pt[-1]]
-        return octop.Database.FromString(pt)
+        try:
+            cipher = Cipher(algorithms.AES(key), modes.CBC(r.data[:16])).decryptor()
+            pt = cipher.update(r.data[16:]) + cipher.finalize()
+            pad_len = pt[-1]
+            if not 1 <= pad_len <= 16:
+                raise ValueError("invalid PKCS#7 padding")
+            return octop.Database.FromString(pt[:-pad_len])
+        finally:
+            r.release_conn()
 
     def load_octo_cache(self, cache_path: Path) -> octop.Database | None:
         if not cache_path.exists():
@@ -94,25 +105,45 @@ class OctoClient:
             log = json.loads(log_path.read_text(encoding="utf-8"))
 
         def dl_one(r):
-            if r.name in log:
+            dest = dest_dir / r.name
+            if log.get(r.name) == "ok" and dest.exists() and dest.stat().st_size > 0:
                 return (r.name, "cached")
             url = url_fmt.replace("{o}", r.objectName)
             for attempt in range(3):
+                resp = None
                 try:
                     resp = _http_request("GET", url, headers=headers, timeout=30)
-                    (dest_dir / r.name).write_bytes(resp.data)
-                    resp.release_conn()
+                    if resp.status < 200 or resp.status >= 300:
+                        raise RuntimeError(f"HTTP {resp.status}")
+                    if not resp.data:
+                        raise RuntimeError("empty response")
+                    tmp = dest.with_suffix(dest.suffix + ".tmp")
+                    tmp.write_bytes(resp.data)
+                    os.replace(tmp, dest)
                     return (r.name, "ok")
                 except Exception as e:
                     if attempt == 2:
                         return (r.name, str(e)[:60])
+                finally:
+                    if resp is not None:
+                        resp.release_conn()
 
-        remaining = [r for r in adv_txts if r.name not in log]
+        remaining = [
+            r for r in adv_txts
+            if not (
+                log.get(r.name) == "ok"
+                and (dest_dir / r.name).exists()
+                and (dest_dir / r.name).stat().st_size > 0
+            )
+        ]
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futs = {pool.submit(dl_one, r): r.name for r in remaining}
             for f in as_completed(futs):
                 name, status = f.result()
-                log[name] = status
+                if status == "ok":
+                    log[name] = status
+                else:
+                    log.pop(name, None)
 
         log_path.write_text(json.dumps(log), encoding="utf-8")
         return len(adv_txts)
