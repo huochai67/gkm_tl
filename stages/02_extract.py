@@ -6,23 +6,69 @@ from lib.parser_master import extract_master_text
 from lib.parser_generic import extract_generic_text
 from lib.parser_localization import extract_localization_text
 from lib.config import load_config, resolve_paths
+from lib.text_utils import looks_like_japanese_source
 
 CACHE = Path("cache")
-# Real mod uses </r>; older docs/build used </r\>. Accept both. Multi-line
-# entries are multiple <r\=...> segments joined by \r\n.
-_RE_RESOURCE_SEGMENT = re.compile(r"<r\\=(.*?)>(.*?)</r(?:\\)?>")
+_RE_RESOURCE_CLOSE = re.compile(r"</r(?:\\)?>")
+_RE_RESOURCE_MARKUP = re.compile(r"</?(?:r|em)(?:\\=[^>]*)?>")
 
 
 def _split_resource_translation(value: str) -> tuple[str, str]:
     """Return the source Japanese and Chinese from a mod text value."""
-    segments = _RE_RESOURCE_SEGMENT.findall(value)
-    if not segments:
+    segments = []
+    position = 0
+    while value.startswith(r"<r\=", position):
+        close = _RE_RESOURCE_CLOSE.search(value, position)
+        if not close:
+            return value, ""
+        body = value[position + len(r"<r\="):close.start()]
+        # The source can contain an unclosed <em\=...> tag in the mod. Its
+        # `>` is not the JP/CN boundary, so use the final `>` before </r>.
+        boundary = body.rfind(">")
+        if boundary < 0:
+            return value, ""
+        segments.append((body[:boundary], body[boundary + 1:]))
+        position = close.end()
+        while value.startswith(r"\r\n", position) or value.startswith(r"\n", position):
+            position += 4 if value.startswith(r"\r\n", position) else 2
+
+    if not segments or position != len(value):
         return value, ""
     if len(segments) == 1:
         return segments[0]
     # Server stores multi-line as literal \n between lines.
     old_jp = r"\n".join(jp for jp, _ in segments)
     existing_cn = r"\n".join(cn for _, cn in segments)
+    return old_jp, existing_cn
+
+
+def _normalize_resource_source(value: str) -> str:
+    """Normalize markup and dash variants omitted by the existing mod."""
+    return _RE_RESOURCE_MARKUP.sub("", value).replace("—", "―")
+
+
+def _resource_sources_equal(old_jp: str, current_jp: str) -> bool:
+    return _normalize_resource_source(old_jp) == _normalize_resource_source(current_jp)
+
+
+def _get_existing_resource_translation(
+    field: str, mod_value: str, current_jp: str
+) -> tuple[str, str]:
+    """Read either wrapped text or the mod's plain-Chinese choice format."""
+    old_jp, existing_cn = _split_resource_translation(mod_value)
+    if (
+        field.startswith("text[")
+        and old_jp
+        and not existing_cn
+        and (
+            old_jp != current_jp
+            or not looks_like_japanese_source(old_jp)
+        )
+    ):
+        # choicegroup translations in the existing mod omit the <r\=JP> wrapper.
+        # They can retain Japanese words inside an otherwise Chinese translation,
+        # or be identical to the source when Japanese and Chinese use the same text.
+        return current_jp, old_jp
     return old_jp, existing_cn
 
 
@@ -64,13 +110,15 @@ def main():
             existing = ""
             old_jp = ""
             if key in mod_items:
-                old_jp, existing = _split_resource_translation(mod_items[key])
+                old_jp, existing = _get_existing_resource_translation(
+                    item["field"], mod_items[key], item["jp"]
+                )
             item["uid"] = f"{name}:{item['line']}:{item['field']}"
             item["file"] = f"{name}.txt"
             item["category"] = "resource"
             item["existing_cn"] = existing
             item["status"] = (
-                "changed" if existing and old_jp != item["jp"]
+                "changed" if existing and not _resource_sources_equal(old_jp, item["jp"])
                 else "existing" if existing
                 else "new"
             )

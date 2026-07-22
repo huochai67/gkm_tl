@@ -87,6 +87,64 @@ class ResourceRegressionTests(unittest.TestCase):
         )
         self.assertEqual(extract._split_resource_translation("plain"), ("plain", ""))
 
+    def test_resource_translation_split_handles_embedded_em_tag(self):
+        extract = _load_stage("02_extract")
+        old_jp, cn = extract._split_resource_translation(
+            "<r\\=——なら、<em\\=・・・>筋トレをがんばらないとね。>"
+            "——那就要努力“锻炼肌肉”了呢。</r>"
+        )
+
+        self.assertEqual(old_jp, "——なら、<em\\=・・・>筋トレをがんばらないとね。")
+        self.assertEqual(cn, "——那就要努力“锻炼肌肉”了呢。")
+        self.assertTrue(
+            extract._resource_sources_equal(
+                old_jp,
+                "――なら、<em\\=・・・>筋トレ</em>をがんばらないとね。",
+            )
+        )
+
+    def test_resource_source_comparison_ignores_ruby_and_dash_variants(self):
+        extract = _load_stage("02_extract")
+        self.assertTrue(
+            extract._resource_sources_equal(
+                "この楽曲は、\\n可愛くて、カッコイイ——",
+                "この楽曲は、\\n可愛くて、カッコイイ――",
+            )
+        )
+        self.assertTrue(
+            extract._resource_sources_equal(
+                "はい。龍月真希さんの\\n所属している劇団です。",
+                "はい。<r\\=りゅうげつまき>龍月真希</r>さんの\\n所属している劇団です。",
+            )
+        )
+
+    def test_plain_chinese_choice_is_an_existing_translation(self):
+        extract = _load_stage("02_extract")
+        self.assertEqual(
+            extract._get_existing_resource_translation(
+                "text[0]", r"我会尊重\n偶像的意见", r"アイドルの意見を\n尊重します"
+            ),
+            (r"アイドルの意見を\n尊重します", r"我会尊重\n偶像的意见"),
+        )
+        self.assertEqual(
+            extract._get_existing_resource_translation(
+                "text[0]", "独占したかったから", "独占したかったから"
+            ),
+            ("独占したかったから", ""),
+        )
+        self.assertEqual(
+            extract._get_existing_resource_translation("text[0]", "金星", "金星"),
+            ("金星", "金星"),
+        )
+        self.assertEqual(
+            extract._get_existing_resource_translation(
+                "text[1]",
+                r"源于谚语“立つ鳥跡を濁さず”\n的关系",
+                r"立つ鳥跡を濁さず\nから",
+            ),
+            (r"立つ鳥跡を濁さず\nから", r"源于谚语“立つ鳥跡を濁さず”\n的关系"),
+        )
+
     def test_changed_translation_is_skipped_by_default(self):
         translate = _load_stage("03_translate")
         changed = {"status": "changed"}
@@ -185,6 +243,25 @@ class DownloadRegressionTests(unittest.TestCase):
 
             self.assertEqual((destination / "new.txt").read_text(encoding="utf-8"), "new")
             self.assertFalse((destination / "old.txt").exists())
+
+
+class PackageRegressionTests(unittest.TestCase):
+    def test_package_includes_local_files_directory_entry(self):
+        package = _load_stage("05_package")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "GakumasTranslationData"
+            (root / "local-files" / "resource").mkdir(parents=True)
+            (root / "version.txt").write_text("test", encoding="utf-8")
+            (root / "local-files" / "resource" / "sample.txt").write_text(
+                "sample", encoding="utf-8"
+            )
+            archive = Path(directory) / "translation.zip"
+
+            package.create_package(root, archive)
+
+            with zipfile.ZipFile(archive) as zip_file:
+                self.assertTrue(zip_file.getinfo("local-files/").is_dir())
+                self.assertEqual(zip_file.read("version.txt"), b"test")
 
 
 if __name__ == "__main__":
