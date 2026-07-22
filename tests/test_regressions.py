@@ -38,9 +38,21 @@ class ResourceRegressionTests(unittest.TestCase):
 
         self.assertEqual(
             built,
-            "[choicegroup text=<r\\=選択肢1>选项1</r\\> "
-            "text=<r\\=選択肢2>选项2</r\\> "
-            "text=<r\\=選択肢3>选项3</r\\>]",
+            "[choicegroup text=<r\\=選択肢1>选项1</r> "
+            "text=<r\\=選択肢2>选项2</r> "
+            "text=<r\\=選択肢3>选项3</r>]",
+        )
+
+    def test_build_wraps_multiline_as_multi_segment(self):
+        line = r"[message text=前列にいるのは、\n麻央さんのお友達ですか？ name={user}]"
+        built = build_resource_line(
+            line,
+            {"text": r"前排的那些人，\n是麻央的朋友吗？"},
+        )
+        self.assertEqual(
+            built,
+            r"[message text=<r\=前列にいるのは、>前排的那些人，</r>\r\n"
+            r"<r\=麻央さんのお友達ですか？>是麻央的朋友吗？</r> name={user}]",
         )
 
     def test_resource_translation_split_detects_source_change(self):
@@ -48,6 +60,17 @@ class ResourceRegressionTests(unittest.TestCase):
         self.assertEqual(
             extract._split_resource_translation("<r\\=旧原文>旧译文</r\\>"),
             ("旧原文", "旧译文"),
+        )
+        self.assertEqual(
+            extract._split_resource_translation("<r\\=お客さん、満席ですね。>观众们，满座呢。</r>"),
+            ("お客さん、満席ですね。", "观众们，满座呢。"),
+        )
+        self.assertEqual(
+            extract._split_resource_translation(
+                r"<r\=前列にいるのは、>前排的那些人，</r>\r\n"
+                r"<r\=麻央さんのお友達ですか？>是麻央的朋友吗？</r>"
+            ),
+            (r"前列にいるのは、\n麻央さんのお友達ですか？", r"前排的那些人，\n是麻央的朋友吗？"),
         )
         self.assertEqual(extract._split_resource_translation("plain"), ("plain", ""))
 

@@ -110,7 +110,7 @@ uv run python stages/05_package.py
 
 重建与 [chinosk6/GakumasTranslationData](https://github.com/chinosk6/GakumasTranslationData) 格式完全一致的目录结构：
 
-- `resource/*.txt` — 替换为 `text=<r\=日文原文>中文翻译</r\>` 格式
+- `resource/*.txt` — 替换为 `text=<r\=日文原文>中文翻译</r>` 格式
 - `message` 的 `name=` — 替换为中文角色名
 - JSON 文件 — 直接替换字段值
 

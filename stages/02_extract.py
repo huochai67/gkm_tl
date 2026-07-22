@@ -8,15 +8,22 @@ from lib.parser_localization import extract_localization_text
 from lib.config import load_config, resolve_paths
 
 CACHE = Path("cache")
-_RE_RESOURCE_TRANSLATION = re.compile(r"^<r\\=(.*?)>(.*?)</r\\>$")
+# Real mod uses </r>; older docs/build used </r\>. Accept both. Multi-line
+# entries are multiple <r\=...> segments joined by \r\n.
+_RE_RESOURCE_SEGMENT = re.compile(r"<r\\=(.*?)>(.*?)</r(?:\\)?>")
 
 
 def _split_resource_translation(value: str) -> tuple[str, str]:
     """Return the source Japanese and Chinese from a mod text value."""
-    match = _RE_RESOURCE_TRANSLATION.match(value)
-    if match:
-        return match.group(1), match.group(2)
-    return value, ""
+    segments = _RE_RESOURCE_SEGMENT.findall(value)
+    if not segments:
+        return value, ""
+    if len(segments) == 1:
+        return segments[0]
+    # Server stores multi-line as literal \n between lines.
+    old_jp = r"\n".join(jp for jp, _ in segments)
+    existing_cn = r"\n".join(cn for _, cn in segments)
+    return old_jp, existing_cn
 
 
 def main():

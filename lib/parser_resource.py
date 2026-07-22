@@ -93,6 +93,15 @@ def extract_resource_text(filepath: Path) -> list[dict]:
 _RE_CHOICE_TEXT = re.compile(r"text=(.*?)(?=\s+(?:text=|[a-zA-Z_]\w*=)|$)")
 
 
+def wrap_resource_translation(jp: str, cn: str) -> str:
+    """Wrap JP/CN into mod format; multi-line (literal \\n) becomes multi-segment."""
+    jp_parts = jp.split(r"\n")
+    cn_parts = cn.split(r"\n")
+    if len(jp_parts) > 1 and len(jp_parts) == len(cn_parts):
+        return r"\r\n".join(f"<r\\={j}>{c}</r>" for j, c in zip(jp_parts, cn_parts))
+    return f"<r\\={jp}>{cn}</r>"
+
+
 def _replace_choice_texts(body: str, translations: dict[int, str]) -> str:
     """Insert translations for indexed choicegroup text values in one pass."""
     index = 0
@@ -102,7 +111,7 @@ def _replace_choice_texts(body: str, translations: dict[int, str]) -> str:
         jp = match.group(1)
         cn = translations.get(index)
         index += 1
-        return f"text=<r\\={jp}>{cn}</r\\>" if cn else match.group(0)
+        return f"text={wrap_resource_translation(jp, cn)}" if cn else match.group(0)
 
     return _RE_CHOICE_TEXT.sub(replace, body)
 
@@ -130,13 +139,14 @@ def build_resource_line(orig_line: str, translations: dict[str, str]) -> str:
             jp = kv.get("text", "")
             if jp:
                 old = f"text={jp}"
-                new = f"text=<r\\={jp}>{cn}</r\\>"
+                new = f"text={wrap_resource_translation(jp, cn)}"
                 body = body.replace(old, new, 1)
         elif field == "name" and cn:
             old = f"name={kv.get('name', '')}"
             new = f"name={cn}"
             body = body.replace(old, new, 1)
     return prefix + body + suffix
+
 
 def parse_resource_dir(dirpath: Path) -> list[dict]:
     results = []
