@@ -7,6 +7,8 @@ llm:
   batch_size: 20
   max_concurrent: 5
   timeout: 180
+  # Set false to retranslate entries whose source Japanese changed.
+  skip_changed: true
 
 paths:
   server_cache: cache/server

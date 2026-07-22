@@ -93,8 +93,19 @@ def extract_resource_text(filepath: Path) -> list[dict]:
 _RE_CHOICE_TEXT = re.compile(r"text=(.*?)(?=\s+(?:text=|[a-zA-Z_]\w*=)|$)")
 
 
+def _normalize_resource_translation(cn: str) -> str:
+    """Make LLM output safe for a one-line resource command."""
+    # Some responses absorb the required batch separator into the last item.
+    cn = re.sub(r"(?:\r?\n|\\r\\n|\\n)+---\s*$", "", cn)
+    cn = cn.replace("\r\n", r"\n").replace("\r", r"\n").replace("\n", r"\n")
+    # Preserve the game's ruby-tag syntax when the model reproduces it.
+    cn = cn.replace("<r=", r"<r\=").replace(r"</r\>", "</r>")
+    return cn
+
+
 def wrap_resource_translation(jp: str, cn: str) -> str:
     """Wrap JP/CN into mod format; multi-line (literal \\n) becomes multi-segment."""
+    cn = _normalize_resource_translation(cn)
     jp_parts = jp.split(r"\n")
     cn_parts = cn.split(r"\n")
     if len(jp_parts) > 1 and len(jp_parts) == len(cn_parts):

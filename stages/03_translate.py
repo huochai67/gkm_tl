@@ -75,7 +75,8 @@ def build_contextual_prompt(group: list[dict]) -> str:
         lines.append("")
 
     lines.append(f"将以下{len(group)}条游戏文本翻译成简体中文。")
-    lines.append("保持 \\n 换行符不变。不要翻译 {user} 占位符。")
+    lines.append("保持 \\n 换行符不变：输出时必须写为两个字符 \\n，绝对不要输出实际换行。不要翻译 {user} 占位符。")
+    lines.append("保留游戏标签格式 `<r\\=...>...</r>`，包括 `r` 后面的反斜杠。")
 
     if any(item.get("speaker") for item in group):
         lines.append("注意对话的角色语气和上下文连贯性。")
@@ -93,7 +94,7 @@ def build_contextual_prompt(group: list[dict]) -> str:
             lines.append(f"[{uid}] {jp}")
 
     lines.append("")
-    lines.append("输出格式：每段必须以原始 [uid] 开头，后接对应译文，用 --- 单独一行分隔。")
+    lines.append("输出格式：每段必须以原始 [uid] 开头，后接对应译文，用 --- 单独一行分隔；--- 不属于译文。")
     lines.append("只翻译本次输入中出现的 [uid]，不要输出任何未出现在输入中的 [uid]。")
     lines.append("不要省略、改写或翻译 [uid]。不要解释。")
     lines.append("")
@@ -193,6 +194,13 @@ def _group_key(item: dict) -> str:
         return f"master:{item.get('file', '')}"
     return f"{item['category']}:flat"
 
+
+def _should_translate(item: dict, skip_changed: bool) -> bool:
+    return item["status"] == "new" or (
+        not skip_changed and item["status"] == "changed"
+    )
+
+
 # ── main ────────────────────────────────────────────────────
 def main():
     global CACHE, CHECKPOINT, TRANSLATED
@@ -203,19 +211,20 @@ def main():
     TRANSLATED = CACHE / "translated.json"
     extract = json.loads((CACHE / "extract.json").read_text(encoding="utf-8"))
     ckpt = _load_checkpoint()
+    skip_changed = config["llm"]["skip_changed"]
 
     to_translate = [
         i for i in extract
-        if i["status"] in ("new", "changed") and i["uid"] not in ckpt
+        if _should_translate(i, skip_changed) and i["uid"] not in ckpt
     ]
     total_pending = len(to_translate)
-    total_all = sum(1 for i in extract if i["status"] in ("new", "changed"))
+    total_all = sum(1 for i in extract if _should_translate(i, skip_changed))
     skipped = total_all - total_pending
     print(f"To translate: {total_all} items ({skipped} checkpointed, {total_pending} pending)", flush=True)
 
     if not to_translate:
         for item in extract:
-            if item["uid"] in ckpt:
+            if _should_translate(item, skip_changed) and item["uid"] in ckpt:
                 item["cn"] = ckpt[item["uid"]]
             else:
                 item["cn"] = item.get("existing_cn", "")
@@ -298,7 +307,7 @@ def main():
     # merge & output
     result_uids = set(results)
     for item in extract:
-        if item["uid"] in ckpt:
+        if _should_translate(item, skip_changed) and item["uid"] in ckpt:
             item["cn"] = ckpt[item["uid"]]
         elif item["uid"] not in result_uids:
             item["cn"] = item.get("existing_cn", "")

@@ -30,6 +30,7 @@ def load_config(path: str = DEFAULT_CONFIG) -> dict:
             except ValueError as exc:
                 raise ValueError(f"Invalid value for {env_key}: {val!r}") from exc
     llm.setdefault("backend", "openai")
+    llm.setdefault("skip_changed", True)
     return cfg
 
 

@@ -55,6 +55,19 @@ class ResourceRegressionTests(unittest.TestCase):
             r"<r\=麻央さんのお友達ですか？>是麻央的朋友吗？</r> name={user}]",
         )
 
+    def test_build_normalizes_llm_resource_markup(self):
+        line = r"[message text=一行目\n『<r\=よみ>語</r>』 name=話者]"
+        built = build_resource_line(
+            line,
+            {"text": "第一行\n《<r=よみ>词</r>》\n---"},
+        )
+
+        self.assertEqual(
+            built,
+            r"[message text=<r\=一行目>第一行</r>\r\n"
+            r"<r\=『<r\=よみ>語</r>』>《<r\=よみ>词</r>》</r> name=話者]",
+        )
+
     def test_resource_translation_split_detects_source_change(self):
         extract = _load_stage("02_extract")
         self.assertEqual(
@@ -73,6 +86,15 @@ class ResourceRegressionTests(unittest.TestCase):
             (r"前列にいるのは、\n麻央さんのお友達ですか？", r"前排的那些人，\n是麻央的朋友吗？"),
         )
         self.assertEqual(extract._split_resource_translation("plain"), ("plain", ""))
+
+    def test_changed_translation_is_skipped_by_default(self):
+        translate = _load_stage("03_translate")
+        changed = {"status": "changed"}
+        new = {"status": "new"}
+
+        self.assertFalse(translate._should_translate(changed, True))
+        self.assertTrue(translate._should_translate(changed, False))
+        self.assertTrue(translate._should_translate(new, True))
 
 
 class LocalizationRegressionTests(unittest.TestCase):
