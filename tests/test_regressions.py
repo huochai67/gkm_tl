@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -478,6 +479,12 @@ class DownloadRegressionTests(unittest.TestCase):
 
 
 class PackageRegressionTests(unittest.TestCase):
+    def test_build_version_uses_ci_override(self):
+        build = _load_stage("04_build")
+
+        with patch.dict("os.environ", {"BUILD_VERSION": "nightly-2026-07-23"}):
+            self.assertEqual(build._build_version(), "nightly-2026-07-23")
+
     def test_package_includes_local_files_directory_entry(self):
         package = _load_stage("05_package")
         with tempfile.TemporaryDirectory() as directory:

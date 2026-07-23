@@ -1,0 +1,66 @@
+name: Nightly Build
+
+on:
+  schedule:
+    # 05:00 Asia/Shanghai (UTC+8)
+    - cron: "0 21 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-release
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    env:
+      LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_MODEL: ${{ secrets.LLM_MODEL }}
+      TZ: Asia/Shanghai
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run regression tests
+        run: uv run python -m unittest discover -s tests
+
+      - name: Build nightly package
+        run: |
+          cp config.yaml.example config.yaml
+          export BUILD_VERSION="nightly-$(date +%F)"
+          uv run python run.py
+
+      - name: Generate release notes
+        run: |
+          upstream_version="$(tr -d '\r\n' < cache/mod/version.txt)"
+          octo_revision="$(uv run python -c 'import json; print(json.load(open("cache/server/octo_index.json", encoding="utf-8"))["revision"])')"
+          build_time="$(date '+%Y-%m-%d %H:%M:%S %Z')"
+          package_sha256="$(sha256sum output/GakumasTranslationData.zip | cut -d ' ' -f 1)"
+          cat > release-notes.md <<EOF
+          Upstream Version: $upstream_version
+          Octo Revision: $octo_revision
+          Built at: $build_time
+          SHA-256: $package_sha256
+          EOF
+
+      - name: Publish nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view nightly >/dev/null 2>&1 || gh release create nightly --prerelease --title "Nightly" --notes-file release-notes.md
+          gh release edit nightly --prerelease --title "Nightly" --notes-file release-notes.md
+          gh release upload nightly output/GakumasTranslationData.zip --clobber

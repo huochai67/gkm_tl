@@ -13,6 +13,11 @@ OUT = Path("output") / "GakumasTranslationData"
 OUT_RL = OUT / "local-files" / "resource"
 MASTER_SOURCE_SNAPSHOT = CACHE / "master_source_snapshot.json"
 
+
+def _build_version() -> str:
+    return os.environ.get("BUILD_VERSION") or f"auto-{date.today().isoformat()}"
+
+
 def _build_resource(fname: str, items: list) -> str | None:
     server_fp = SERVER_RES / fname
     mod_fp = MOD / "local-files" / "resource" / fname
@@ -224,7 +229,7 @@ def main():
     print(f"  Applying {len(loc_items)} localization translations...", flush=True)
     _apply_localization(loc_items)
 
-    version = f"auto-{date.today().isoformat()}"
+    version = _build_version()
     (OUT / "version.txt").write_text(version)
     print(f"  [OK] Output: {OUT}", flush=True)
 
