@@ -1,6 +1,7 @@
 import importlib.util
 import io
 import json
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -22,6 +23,14 @@ PROJECT_ROOT = Path(__file__).parent.parent
 def _load_stage(name: str):
     path = PROJECT_ROOT / "stages" / f"{name}.py"
     spec = importlib.util.spec_from_file_location(name.replace("-", "_"), path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_tool(name: str):
+    path = PROJECT_ROOT / "tools" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -297,6 +306,42 @@ class PackageRegressionTests(unittest.TestCase):
             with zipfile.ZipFile(archive) as zip_file:
                 self.assertTrue(zip_file.getinfo("local-files/").is_dir())
                 self.assertEqual(zip_file.read("version.txt"), b"test")
+
+
+class ExportPendingRegressionTests(unittest.TestCase):
+    def test_status_argument_selects_export_status(self):
+        export = _load_tool("export_pending")
+        original_argv = sys.argv
+        try:
+            sys.argv = ["export_pending.py"]
+            self.assertIsNone(export._parse_args().status)
+
+            sys.argv = ["export_pending.py", "--status", "new"]
+            self.assertEqual(export._parse_args().status, "new")
+
+            sys.argv = ["export_pending.py", "--status", "changed"]
+            self.assertEqual(export._parse_args().status, "changed")
+        finally:
+            sys.argv = original_argv
+
+    def test_export_writes_only_selected_status_items(self):
+        export = _load_tool("export_pending")
+        extract = [
+            {"uid": "new", "status": "new"},
+            {"uid": "changed", "status": "changed"},
+            {"uid": "existing", "status": "existing"},
+        ]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "custom" / "changed.json"
+
+            count = export.export_items(extract, "changed", output)
+
+            self.assertEqual(count, 1)
+            self.assertEqual(
+                json.loads(output.read_text(encoding="utf-8")), [extract[1]]
+            )
 
 
 if __name__ == "__main__":

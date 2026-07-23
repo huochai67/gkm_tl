@@ -105,7 +105,7 @@ uv run python stages/05_package.py
 
 默认仅调用 LLM 翻译 `new` 内容；设置 `llm.skip_changed: false` 后也会翻译 `changed` 内容。支持并发请求，可配置 `batch_size` 和 `max_concurrent`。
 
-使用 `uv run tools/export_changed.py` 可将待人工复核的 `changed` 条目导出为 `cache/changed.json`；通过 `--output <path>` 可指定导出位置。
+使用 `uv run tools/export_pending.py` 默认导出 `new` 和 `changed` 条目到 `cache/new.json`、`cache/changed.json`。通过 `--status <new|changed>` 可只导出指定状态的条目。
 
 角色名通过映射表自动替换为中文。
 
@@ -142,7 +142,7 @@ gkm-tl/
 │   ├── 04_build.py          # 打包阶段
 │   └── 05_package.py        # 压缩阶段
 ├── tools/
-│   └── export_changed.py     # 导出 changed 条目供人工复核
+│   └── export_pending.py     # 导出 new 和 changed 条目供人工复核
 ├── cache/                   # 缓存目录（自动生成）
 │   ├── server/              # 服务器原始资源
 │   ├── mod/                 # 现有翻译模版
