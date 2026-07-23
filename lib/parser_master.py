@@ -58,14 +58,20 @@ def extract_master_text(
             for key, val in rec.items():
                 if isinstance(val, str) and len(val) >= 2 and contains_japanese(val):
                     existing_cn = ""
-                    if rec_id and rec_id in existing and key in existing[rec_id]:
+                    # Master IDs are not always unique. Source and translation
+                    # records share an order, so use it before falling back to ID.
+                    if rec_idx < len(existing_records) and (
+                        not rec_id or existing_records[rec_idx].get("id", "") == rec_id
+                    ) and key in existing_records[rec_idx]:
+                        existing_cn = existing_records[rec_idx].get(key, "")
+                    elif rec_idx < len(fallback_records) and (
+                        not rec_id or fallback_records[rec_idx].get("id", "") == rec_id
+                    ) and key in fallback_records[rec_idx]:
+                        existing_cn = fallback_records[rec_idx].get(key, "")
+                    elif rec_id and rec_id in existing and key in existing[rec_id]:
                         existing_cn = existing[rec_id][key]
                     elif rec_id and rec_id in fallback_existing and key in fallback_existing[rec_id]:
                         existing_cn = fallback_existing[rec_id][key]
-                    elif not rec_id and rec_idx < len(existing_records):
-                        existing_cn = existing_records[rec_idx].get(key, "")
-                    elif not rec_id and rec_idx < len(fallback_records):
-                        existing_cn = fallback_records[rec_idx].get(key, "")
                     uid = f"master:{name}:{rec_idx}:{uid_id}:{key}"
                     previous_jp = source_snapshot.get(uid)
                     status = (

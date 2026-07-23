@@ -40,12 +40,39 @@ def _build_resource(fname: str, items: list) -> str | None:
 def _apply_master(fname: str, items: list) -> int:
     fp = OUT / "local-files" / "masterTrans" / fname
     if not fp.exists():
-        return 0
+        # A newly added master table has no base translation file to copy. The
+        # translation format can overlay these records by their source ID.
+        records_by_id: dict[str, dict] = {}
+        for item in items:
+            cn = item.get("cn") or item.get("existing_cn") or ""
+            record_id = item.get("record_id", "")
+            if not cn or not record_id:
+                continue
+            records_by_id.setdefault(record_id, {"id": record_id})[item["field"]] = cn
+        if not records_by_id:
+            return 0
+        data = {
+            "rules": {"primaryKeys": ["id"]},
+            "data": list(records_by_id.values()),
+        }
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        fp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        return sum(1 for item in items if item.get("cn") or item.get("existing_cn"))
+
     data = json.loads(fp.read_text(encoding="utf-8"))
     count = 0
-    records_by_id = {record.get("id"): record for record in data.get("data", [])}
+    records = data.get("data", [])
+    records_by_id = {record.get("id"): record for record in records}
     for item in items:
-        record = records_by_id.get(item["record_id"])
+        # The extraction UID stores the source record index. It is required for
+        # id-less records and avoids collisions in master files with duplicate IDs.
+        try:
+            record_index = int(item["uid"].split(":", 3)[2])
+        except (IndexError, ValueError):
+            record_index = -1
+        record = records[record_index] if 0 <= record_index < len(records) else None
+        if record is None:
+            record = records_by_id.get(item["record_id"])
         if record is not None:
             cn = item.get("cn") or item.get("existing_cn") or ""
             if not cn:

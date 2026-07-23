@@ -246,6 +246,84 @@ class LocalizationRegressionTests(unittest.TestCase):
 
 
 class MasterRegressionTests(unittest.TestCase):
+    def test_master_uses_record_index_for_duplicate_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            yaml_dir = root / "yaml"
+            mod_dir = root / "mod"
+            yaml_dir.mkdir()
+            mod_dir.mkdir()
+            (yaml_dir / "sample.yaml").write_text(
+                "- id: repeated\n  name: 原文一\n- id: repeated\n  name: 原文二\n",
+                encoding="utf-8",
+            )
+            (mod_dir / "sample.json").write_text(
+                json.dumps(
+                    {"data": [{"id": "repeated", "name": "译文一"}, {"id": "repeated", "name": "译文二"}]},
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            items = extract_master_text(yaml_dir, mod_dir)
+
+        self.assertEqual([item["existing_cn"] for item in items], ["译文一", "译文二"])
+
+    def test_build_master_uses_record_index_for_idless_and_duplicate_records(self):
+        build = _load_stage("04_build")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            master_dir = root / "local-files" / "masterTrans"
+            master_dir.mkdir(parents=True)
+            target = master_dir / "sample.json"
+            target.write_text(
+                json.dumps(
+                    {"data": [{"id": "repeated", "name": ""}, {"id": "repeated", "name": ""}, {"name": ""}]},
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            original_out = build.OUT
+            build.OUT = root
+            try:
+                count = build._apply_master(
+                    "sample.json",
+                    [
+                        {"uid": "master:sample:0:repeated:name", "record_id": "repeated", "field": "name", "cn": "译文一"},
+                        {"uid": "master:sample:1:repeated:name", "record_id": "repeated", "field": "name", "cn": "译文二"},
+                        {"uid": "master:sample:2:_idx2:name", "record_id": "", "field": "name", "cn": "无 ID 译文"},
+                    ],
+                )
+            finally:
+                build.OUT = original_out
+            data = json.loads(target.read_text(encoding="utf-8"))
+
+        self.assertEqual(count, 3)
+        self.assertEqual([record["name"] for record in data["data"]], ["译文一", "译文二", "无 ID 译文"])
+
+    def test_build_master_creates_missing_id_based_table(self):
+        build = _load_stage("04_build")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original_out = build.OUT
+            build.OUT = root
+            try:
+                count = build._apply_master(
+                    "new-table.json",
+                    [{"record_id": "record-1", "field": "name", "cn": "新译文"}],
+                )
+            finally:
+                build.OUT = original_out
+            data = json.loads(
+                (root / "local-files" / "masterTrans" / "new-table.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertEqual(count, 1)
+        self.assertEqual(data["rules"]["primaryKeys"], ["id"])
+        self.assertEqual(data["data"], [{"id": "record-1", "name": "新译文"}])
+
     def test_master_snapshot_detects_changed_source_text(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -290,6 +368,32 @@ class MasterRegressionTests(unittest.TestCase):
             items = extract_master_text(yaml_dir, primary_dir, fallback_mod_master_dir=nightly_dir)
 
         self.assertEqual(items[0]["existing_cn"], "主包译文")
+
+    def test_master_uses_nightly_when_primary_record_lacks_field(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            yaml_dir = root / "yaml"
+            primary_dir = root / "primary"
+            nightly_dir = root / "nightly"
+            yaml_dir.mkdir()
+            primary_dir.mkdir()
+            nightly_dir.mkdir()
+            (yaml_dir / "sample.yaml").write_text(
+                "- id: 1\n  name: 原文\n", encoding="utf-8"
+            )
+            (primary_dir / "sample.json").write_text(
+                json.dumps({"data": [{"id": 1}]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (nightly_dir / "sample.json").write_text(
+                json.dumps({"data": [{"id": 1, "name": "nightly译文"}]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            items = extract_master_text(yaml_dir, primary_dir, fallback_mod_master_dir=nightly_dir)
+
+        self.assertEqual(items[0]["existing_cn"], "nightly译文")
+        self.assertEqual(items[0]["status"], "existing")
 
     def test_master_uses_record_index_for_idless_nightly_entries(self):
         with tempfile.TemporaryDirectory() as directory:
