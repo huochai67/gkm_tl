@@ -12,7 +12,7 @@ import lib.octo as octo_module
 from lib.octo import OctoClient
 from lib.parser_localization import extract_localization_text
 from lib.parser_master import extract_master_text
-from lib.parser_resource import build_resource_line
+from lib.parser_resource import build_resource_line, extract_resource_text
 from lib.proto import octodb_pb2 as octop
 from lib.text_utils import looks_like_japanese_source
 
@@ -64,6 +64,47 @@ class ResourceRegressionTests(unittest.TestCase):
             r"<r\=麻央さんのお友達ですか？>是麻央的朋友吗？</r> name={user}]",
         )
 
+    def test_extract_choice_translation_preserves_wrapped_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "adv_choice.txt"
+            path.write_text(
+                r"[choicegroup choices=[choice text=<r\=独占したかったから>因为我想独占你</r> clip=none]]",
+                encoding="utf-8",
+            )
+
+            item = extract_resource_text(path)[0]
+
+        self.assertEqual(
+            item["jp"], r"<r\=独占したかったから>因为我想独占你</r>"
+        )
+
+    def test_choice_translation_ignores_stray_choice_closer(self):
+        extract = _load_stage("02_extract")
+
+        self.assertEqual(
+            extract._get_existing_resource_translation(
+                "text[0]",
+                r"<r\=独占したかったから]>因为我想独占你</r>",
+                "独占したかったから",
+            ),
+            ("独占したかったから", "因为我想独占你"),
+        )
+
+    def test_nightly_resource_translation_supersedes_untranslated_primary(self):
+        extract = _load_stage("02_extract")
+        current = "独占したかったから"
+        _, primary_cn = extract._get_existing_resource_translation(
+            "text[0]", current, current
+        )
+        _, nightly_cn = extract._get_existing_resource_translation(
+            "text[0]",
+            r"<r\=独占したかったから]>因为我想独占你</r>",
+            current,
+        )
+
+        self.assertFalse(primary_cn)
+        self.assertEqual(nightly_cn, "因为我想独占你")
+
     def test_build_normalizes_llm_resource_markup(self):
         line = r"[message text=一行目\n『<r\=よみ>語</r>』 name=話者]"
         built = build_resource_line(
@@ -110,6 +151,24 @@ class ResourceRegressionTests(unittest.TestCase):
                 old_jp,
                 "――なら、<em\\=・・・>筋トレ</em>をがんばらないとね。",
             )
+        )
+
+    def test_resource_translation_split_handles_nested_ruby_tags(self):
+        extract = _load_stage("02_extract")
+        value = (
+            r"<r\=（咲季さんは、プロジェクト『<r\=スターダスト>星屑</r>』を>"
+            r"({user}) （咲季经历了“<r\=スターダスト>星屑</r>”企划……</r>\r\n"
+            r"<r\=経て……大きな成果を上げた）>取得了巨大的成果）</r>"
+        )
+
+        self.assertEqual(
+            extract._split_resource_translation(value),
+            (
+                r"（咲季さんは、プロジェクト『<r\=スターダスト>星屑</r>』を\n"
+                r"経て……大きな成果を上げた）",
+                r"({user}) （咲季经历了“<r\=スターダスト>星屑</r>”企划……\n"
+                r"取得了巨大的成果）",
+            ),
         )
 
     def test_resource_source_comparison_ignores_ruby_and_dash_variants(self):
@@ -181,6 +240,9 @@ class LocalizationRegressionTests(unittest.TestCase):
         self.assertEqual(items[1]["existing_cn"], "大家好")
         self.assertTrue(looks_like_japanese_source("みんな"))
         self.assertFalse(looks_like_japanese_source("大家好"))
+        self.assertFalse(
+            looks_like_japanese_source("通过链接关注SNS！\n#学園アイドルマスター #学マス")
+        )
 
 
 class MasterRegressionTests(unittest.TestCase):
@@ -228,6 +290,28 @@ class MasterRegressionTests(unittest.TestCase):
             items = extract_master_text(yaml_dir, primary_dir, fallback_mod_master_dir=nightly_dir)
 
         self.assertEqual(items[0]["existing_cn"], "主包译文")
+
+    def test_master_uses_record_index_for_idless_nightly_entries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            yaml_dir = root / "yaml"
+            primary_dir = root / "primary"
+            nightly_dir = root / "nightly"
+            yaml_dir.mkdir()
+            primary_dir.mkdir()
+            nightly_dir.mkdir()
+            (yaml_dir / "sample.yaml").write_text("- title: 原文\n", encoding="utf-8")
+            (nightly_dir / "sample.json").write_text(
+                json.dumps({"data": [{"title": "nightly译文"}]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            item = extract_master_text(
+                yaml_dir, primary_dir, fallback_mod_master_dir=nightly_dir
+            )[0]
+
+        self.assertEqual(item["existing_cn"], "nightly译文")
+        self.assertEqual(item["status"], "existing")
 
 
 class DownloadRegressionTests(unittest.TestCase):

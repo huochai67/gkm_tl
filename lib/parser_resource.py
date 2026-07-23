@@ -85,7 +85,10 @@ def extract_resource_text(filepath: Path) -> list[dict]:
             if "name" in kv and cmd == "message":
                 results.append({"line": line_no, "command": cmd, "field": "name", "jp": kv["name"]})
         elif cmd == "choicegroup":
-            choices = re.findall(r"text=([^\]]*?)(?=\s+(?:text=|[a-zA-Z_]\w*=)|\])", body)
+            choices = re.findall(
+                r"text=(.*?)(?:\](?=\s+[a-zA-Z_]\w*=|$)|(?=\s+(?:text=|[a-zA-Z_]\w*=)|$))",
+                body,
+            )
             for ci, ct in enumerate(choices):
                 results.append({"line": line_no, "command": "choice", "field": f"text[{ci}]", "jp": ct})
     return results

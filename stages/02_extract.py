@@ -13,18 +13,55 @@ _RE_RESOURCE_CLOSE = re.compile(r"</r(?:\\)?>")
 _RE_RESOURCE_MARKUP = re.compile(r"</?(?:r|em)(?:\\=[^>]*)?>")
 
 
+def _find_outer_resource_close(value: str, position: int) -> re.Match | None:
+    """Find the closing </r> for the outer translation wrapper."""
+    depth = 0
+    for match in re.finditer(r"<r\\=|</r(?:\\)?>", value[position:]):
+        if match.group() == r"<r\=":
+            depth += 1
+        else:
+            depth -= 1
+            if depth == 0:
+                return _RE_RESOURCE_CLOSE.match(value, position + match.start())
+    return None
+
+
+def _find_resource_translation_boundary(body: str) -> int:
+    """Find the JP/CN separator while ignoring source markup tags."""
+    position = 0
+    ruby_depth = 0
+    while position < len(body):
+        if body.startswith(r"<r\=", position):
+            tag_end = body.find(">", position)
+            if tag_end < 0:
+                return -1
+            ruby_depth += 1
+            position = tag_end + 1
+        elif (close := _RE_RESOURCE_CLOSE.match(body, position)):
+            ruby_depth -= 1
+            position = close.end()
+        elif body[position] == "<":
+            tag_end = body.find(">", position)
+            if tag_end < 0:
+                return -1
+            position = tag_end + 1
+        elif body[position] == ">" and ruby_depth == 0:
+            return position
+        else:
+            position += 1
+    return -1
+
+
 def _split_resource_translation(value: str) -> tuple[str, str]:
     """Return the source Japanese and Chinese from a mod text value."""
     segments = []
     position = 0
     while value.startswith(r"<r\=", position):
-        close = _RE_RESOURCE_CLOSE.search(value, position)
+        close = _find_outer_resource_close(value, position)
         if not close:
             return value, ""
         body = value[position + len(r"<r\="):close.start()]
-        # The source can contain an unclosed <em\=...> tag in the mod. Its
-        # `>` is not the JP/CN boundary, so use the final `>` before </r>.
-        boundary = body.rfind(">")
+        boundary = _find_resource_translation_boundary(body)
         if boundary < 0:
             return value, ""
         segments.append((body[:boundary], body[boundary + 1:]))
@@ -55,6 +92,10 @@ def _get_existing_resource_translation(
     field: str, mod_value: str, current_jp: str
 ) -> tuple[str, str]:
     """Read either wrapped text or the mod's plain-Chinese choice format."""
+    if field.startswith("text[") and mod_value.startswith(r"<r\="):
+        # Some choicegroup translations close the nested [choice] before the
+        # JP/CN separator, leaving a stray ] inside the translation wrapper.
+        mod_value = mod_value.replace("]>", ">", 1)
     old_jp, existing_cn = _split_resource_translation(mod_value)
     if (
         field.startswith("text[")
@@ -106,10 +147,11 @@ def main():
         if mod_fp.exists():
             for item in extract_resource_text(mod_fp):
                 mod_items[(item["line"], item["field"])] = item["jp"]
+        nightly_items = {}
         nightly_fp = nightly_res / f"{name}.txt"
         if use_nightly and nightly_fp.exists():
             for item in extract_resource_text(nightly_fp):
-                mod_items.setdefault((item["line"], item["field"]), item["jp"])
+                nightly_items[(item["line"], item["field"])] = item["jp"]
 
         speaker_map = {}
         for item in server_items:
@@ -126,6 +168,10 @@ def main():
                 old_jp, existing = _get_existing_resource_translation(
                     item["field"], mod_items[key], item["jp"]
                 )
+            if not existing and key in nightly_items:
+                old_jp, existing = _get_existing_resource_translation(
+                    item["field"], nightly_items[key], item["jp"]
+                )
             item["uid"] = f"{name}:{item['line']}:{item['field']}"
             item["file"] = f"{name}.txt"
             item["category"] = "resource"
@@ -135,6 +181,10 @@ def main():
                 else "existing" if existing
                 else "new"
             )
+
+            if item["jp"] == "{user}":
+                item["existing_cn"] = item["jp"]
+                item["status"] = "existing"
 
             if item["field"] == "text":
                 item["speaker"] = speaker_map.get(item["line"], "")

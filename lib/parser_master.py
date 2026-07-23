@@ -39,14 +39,18 @@ def extract_master_text(
             continue
 
         existing = {}
+        existing_records = []
         if name in mod_files:
             mod_data = mod_files[name]
+            existing_records = mod_data.get("data", [])
             for item in mod_data.get("data", []):
                 existing[item.get("id", "")] = item
         fallback_existing = {}
+        fallback_records = []
         if name in fallback_mod_files:
             for item in fallback_mod_files[name].get("data", []):
                 fallback_existing[item.get("id", "")] = item
+            fallback_records = fallback_mod_files[name].get("data", [])
 
         for rec_idx, rec in enumerate(records):
             rec_id = rec.get("id", "")
@@ -54,10 +58,14 @@ def extract_master_text(
             for key, val in rec.items():
                 if isinstance(val, str) and len(val) >= 2 and contains_japanese(val):
                     existing_cn = ""
-                    if rec_id in existing and key in existing[rec_id]:
+                    if rec_id and rec_id in existing and key in existing[rec_id]:
                         existing_cn = existing[rec_id][key]
-                    elif rec_id in fallback_existing and key in fallback_existing[rec_id]:
+                    elif rec_id and rec_id in fallback_existing and key in fallback_existing[rec_id]:
                         existing_cn = fallback_existing[rec_id][key]
+                    elif not rec_id and rec_idx < len(existing_records):
+                        existing_cn = existing_records[rec_idx].get(key, "")
+                    elif not rec_id and rec_idx < len(fallback_records):
+                        existing_cn = fallback_records[rec_idx].get(key, "")
                     uid = f"master:{name}:{rec_idx}:{uid_id}:{key}"
                     previous_jp = source_snapshot.get(uid)
                     status = (
