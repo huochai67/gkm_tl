@@ -7,7 +7,9 @@ from lib.config import load_config, resolve_paths
 CACHE = Path("cache")
 SERVER = CACHE / "server"
 MOD = CACHE / "mod"
+NIGHTLY_MOD = CACHE / "nightly"
 GKM_DIFF = CACHE / "gkm-diff"
+NIGHTLY_ZIP_URL = "https://github.com/huochai67/gkm_tl/releases/download/nightly/GakumasTranslationData.zip"
 
 
 def _extract_zip_atomically(content: bytes, destination: Path) -> None:
@@ -44,11 +46,12 @@ def _download(url: str, timeout: int) -> bytes:
 
 
 def main():
-    global SERVER, MOD, GKM_DIFF
+    global SERVER, MOD, NIGHTLY_MOD, GKM_DIFF
     config = load_config()
     paths = resolve_paths(config)
     SERVER = paths["server_cache"]
     MOD = paths["mod_cache"]
+    NIGHTLY_MOD = paths["nightly_mod_cache"]
     GKM_DIFF = paths["gkm_diff"]
     SERVER.mkdir(parents=True, exist_ok=True)
     MOD.mkdir(parents=True, exist_ok=True)
@@ -90,6 +93,7 @@ def main():
     github = config.get("github", {})
     owner = github.get("owner", "chinosk6")
     repo = github.get("repo", "GakumasTranslationData")
+    use_nightly = github.get("use_nightly", True)
     github_api = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
     req = urllib.request.Request(github_api, headers={"Accept": "application/json"})
     resp = urllib.request.urlopen(req, timeout=30)
@@ -106,8 +110,20 @@ def main():
         mod_version_file.write_text(tag)
         print(f"  Extracted to {MOD}", flush=True)
 
+    if use_nightly:
+        try:
+            print("[3b/3] Downloading nightly translation package...")
+            _extract_zip_atomically(_download(NIGHTLY_ZIP_URL, 120), NIGHTLY_MOD)
+            print(f"  Extracted to {NIGHTLY_MOD}", flush=True)
+        except Exception as error:
+            if not NIGHTLY_MOD.exists():
+                raise
+            print(f"  Refresh failed; using cached nightly package: {error}", flush=True)
+    else:
+        print("[3b/3] Skipping nightly translation package")
+
     try:
-        print("[3b/3] Refreshing gakumasu-diff...")
+        print("[3c/3] Refreshing gakumasu-diff...")
         zip_url = "https://github.com/vertesan/gakumasu-diff/archive/refs/heads/master.zip"
         _extract_zip_atomically(_download(zip_url, 120), GKM_DIFF)
         print(f"  Extracted to {GKM_DIFF}", flush=True)

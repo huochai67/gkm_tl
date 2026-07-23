@@ -50,15 +50,17 @@
 |---|---|---|
 | 游戏服务器 Octo Resources | adv_*.txt (3697 个冒险脚本) | octo API，无需认证 |
 | GitHub Release | GakumasTranslationData.zip | GitHub API |
+| gkm_tl nightly | GakumasTranslationData.zip | 固定 ZIP 下载 |
 | gakumasu-diff | master 数据 YAML | GitHub ZIP 下载 |
 
 ### 流程
 
 1. GitHub API 检查最新 release tag
 2. 若 `mod/version.txt` 版本号不同，下载 zip 解压到 `cache/mod/`
-3. 下载并原子替换 `gakumasu-diff` 缓存到 `cache/gkm-diff/`
-4. 从 Octo 下载最新 adv TXT（增量下载，断点续传）
-5. 记录下载日志
+3. 下载并原子替换 nightly 包到 `cache/nightly/`（可由 `github.use_nightly: false` 禁用）
+4. 下载并原子替换 `gakumasu-diff` 缓存到 `cache/gkm-diff/`
+5. 从 Octo 下载最新 adv TXT（增量下载，断点续传）
+6. 记录下载日志
 
 ## Stage 2: 提取
 
@@ -182,10 +184,12 @@ llm:
 github:
   owner: chinosk6
   repo: GakumasTranslationData
+  use_nightly: true
 
 paths:
   server_cache: cache/server
   mod_cache: cache/mod
+  nightly_mod_cache: cache/nightly
   gkm_diff: cache/gkm-diff
   output: output
 ```

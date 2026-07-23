@@ -72,13 +72,22 @@ def _get_existing_resource_translation(
     return old_jp, existing_cn
 
 
+def _add_fallback_items(primary_items: list[dict], fallback_items: list[dict]) -> list[dict]:
+    """Keep primary package entries and use nightly entries only when absent."""
+    primary_uids = {item["uid"] for item in primary_items}
+    return primary_items + [item for item in fallback_items if item["uid"] not in primary_uids]
+
+
 def main():
     config = load_config()
     paths = resolve_paths(config)
     cache_dir = paths["server_cache"].parent
+    use_nightly = config.get("github", {}).get("use_nightly", True)
 
     server_res = paths["server_cache"] / "res_raw"
     mod_res = paths["mod_cache"] / "local-files" / "resource"
+    nightly_root = paths["nightly_mod_cache"]
+    nightly_res = nightly_root / "local-files" / "resource"
     master_dir = paths["gkm_diff"]
     mod_master = paths["mod_cache"] / "local-files" / "masterTrans"
     mod_generic = paths["mod_cache"] / "local-files" / "genericTrans"
@@ -97,6 +106,10 @@ def main():
         if mod_fp.exists():
             for item in extract_resource_text(mod_fp):
                 mod_items[(item["line"], item["field"])] = item["jp"]
+        nightly_fp = nightly_res / f"{name}.txt"
+        if use_nightly and nightly_fp.exists():
+            for item in extract_resource_text(nightly_fp):
+                mod_items.setdefault((item["line"], item["field"]), item["jp"])
 
         speaker_map = {}
         for item in server_items:
@@ -144,11 +157,24 @@ def main():
         master_dir,
         mod_master,
         cache_dir / "master_source_snapshot.json",
+        nightly_root / "local-files" / "masterTrans" if use_nightly else None,
     )
     print("  parsing generic data...", flush=True)
-    all_items += extract_generic_text(mod_generic)
+    generic_items = extract_generic_text(mod_generic)
+    if use_nightly:
+        generic_items = _add_fallback_items(
+            generic_items,
+            extract_generic_text(nightly_root / "local-files" / "genericTrans"),
+        )
+    all_items += generic_items
     print("  parsing localization data...", flush=True)
-    all_items += extract_localization_text(paths["mod_cache"] / "local-files" / "localization.json")
+    localization_items = extract_localization_text(paths["mod_cache"] / "local-files" / "localization.json")
+    if use_nightly:
+        localization_items = _add_fallback_items(
+            localization_items,
+            extract_localization_text(nightly_root / "local-files" / "localization.json"),
+        )
+    all_items += localization_items
 
     (cache_dir / "extract.json").write_text(json.dumps(all_items, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"Extracted {len(all_items)} items ({sum(1 for i in all_items if i['status']=='new')} new)", flush=True)

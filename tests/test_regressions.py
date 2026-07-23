@@ -197,6 +197,29 @@ class MasterRegressionTests(unittest.TestCase):
 
         self.assertEqual(item["status"], "changed")
 
+    def test_master_uses_nightly_only_when_primary_lacks_field(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            yaml_dir = root / "yaml"
+            primary_dir = root / "primary"
+            nightly_dir = root / "nightly"
+            yaml_dir.mkdir()
+            primary_dir.mkdir()
+            nightly_dir.mkdir()
+            (yaml_dir / "sample.yaml").write_text("- id: 1\n  name: 原文\n", encoding="utf-8")
+            (primary_dir / "sample.json").write_text(
+                json.dumps({"data": [{"id": 1, "name": "主包译文"}]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (nightly_dir / "sample.json").write_text(
+                json.dumps({"data": [{"id": 1, "name": "nightly译文"}]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            items = extract_master_text(yaml_dir, primary_dir, fallback_mod_master_dir=nightly_dir)
+
+        self.assertEqual(items[0]["existing_cn"], "主包译文")
+
 
 class DownloadRegressionTests(unittest.TestCase):
     def test_failed_asset_is_not_cached_and_is_retried(self):
@@ -243,6 +266,18 @@ class DownloadRegressionTests(unittest.TestCase):
 
             self.assertEqual((destination / "new.txt").read_text(encoding="utf-8"), "new")
             self.assertFalse((destination / "old.txt").exists())
+
+    def test_nightly_items_only_fill_missing_primary_entries(self):
+        extract = _load_stage("02_extract")
+        primary = [{"uid": "resource:primary", "existing_cn": "主包译文"}]
+        nightly = [
+            {"uid": "resource:primary", "existing_cn": "nightly译文"},
+            {"uid": "resource:nightly", "existing_cn": "nightly补充"},
+        ]
+
+        items = extract._add_fallback_items(primary, nightly)
+
+        self.assertEqual(items, [primary[0], nightly[1]])
 
 
 class PackageRegressionTests(unittest.TestCase):

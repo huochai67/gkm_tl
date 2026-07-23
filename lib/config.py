@@ -39,6 +39,7 @@ def resolve_paths(config: dict) -> dict[str, Path]:
     defaults = {
         "server_cache": "cache/server",
         "mod_cache": "cache/mod",
+        "nightly_mod_cache": "cache/nightly",
         "gkm_diff": "cache/gkm-diff",
         "output": "output",
     }

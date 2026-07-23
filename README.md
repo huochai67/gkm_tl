@@ -85,9 +85,10 @@ uv run python stages/05_package.py
 |------|------|------|
 | Octo 服务器 | `adv_*.txt` 冒险脚本 | HTTPS 请求 + AES-CBC 解密 |
 | GitHub Release | 现有中文翻译模版 | GitHub API 下载 zip |
+| gkm_tl nightly | 补充中文翻译模版 | 固定 ZIP 下载 |
 | gakumasu-diff | master 数据 YAML | GitHub ZIP 下载 |
 
-每次运行会刷新 Octo 索引和 `gakumasu-diff`；刷新失败时回退到已有本地缓存。资源下载仅记录成功文件，失败文件会在下次运行重试。
+每次运行会刷新 Octo 索引、nightly 包和 `gakumasu-diff`；刷新失败时回退到已有本地缓存。提取时优先使用 GitHub Release 的 `GakumasTranslationData`，仅在其未提供条目时使用 nightly 包。设置 `github.use_nightly: false` 可跳过 nightly 的下载和提取。资源下载仅记录成功文件，失败文件会在下次运行重试。
 
 ### Stage 2: 提取
 

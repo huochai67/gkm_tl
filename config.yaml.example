@@ -13,12 +13,15 @@ llm:
 paths:
   server_cache: cache/server
   mod_cache: cache/mod
+  nightly_mod_cache: cache/nightly
   gkm_diff: cache/gkm-diff
   output: output
 
 github:
   owner: chinosk6
   repo: GakumasTranslationData
+  # Set false to skip downloading and extracting the nightly package.
+  use_nightly: true
 
 character_names:
   amao: 有村麻央

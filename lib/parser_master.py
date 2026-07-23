@@ -9,6 +9,7 @@ def extract_master_text(
     yaml_dir: Path,
     mod_master_dir: Path,
     source_snapshot_path: Path | None = None,
+    fallback_mod_master_dir: Path | None = None,
 ) -> list[dict]:
     results = []
     source_snapshot = {}
@@ -19,6 +20,10 @@ def extract_master_text(
     if mod_master_dir.exists():
         for fp in mod_master_dir.glob("*.json"):
             mod_files[fp.stem] = json.loads(fp.read_text(encoding="utf-8"))
+    fallback_mod_files = {}
+    if fallback_mod_master_dir and fallback_mod_master_dir.exists():
+        for fp in fallback_mod_master_dir.glob("*.json"):
+            fallback_mod_files[fp.stem] = json.loads(fp.read_text(encoding="utf-8"))
 
     for fi, yaml_fp in enumerate(yaml_files):
         name = yaml_fp.stem
@@ -38,6 +43,10 @@ def extract_master_text(
             mod_data = mod_files[name]
             for item in mod_data.get("data", []):
                 existing[item.get("id", "")] = item
+        fallback_existing = {}
+        if name in fallback_mod_files:
+            for item in fallback_mod_files[name].get("data", []):
+                fallback_existing[item.get("id", "")] = item
 
         for rec_idx, rec in enumerate(records):
             rec_id = rec.get("id", "")
@@ -47,6 +56,8 @@ def extract_master_text(
                     existing_cn = ""
                     if rec_id in existing and key in existing[rec_id]:
                         existing_cn = existing[rec_id][key]
+                    elif rec_id in fallback_existing and key in fallback_existing[rec_id]:
+                        existing_cn = fallback_existing[rec_id][key]
                     uid = f"master:{name}:{rec_idx}:{uid_id}:{key}"
                     previous_jp = source_snapshot.get(uid)
                     status = (
