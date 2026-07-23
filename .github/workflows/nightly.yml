@@ -61,6 +61,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view nightly >/dev/null 2>&1 || gh release create nightly --prerelease --title "Nightly" --notes-file release-notes.md
-          gh release edit nightly --prerelease --title "Nightly" --notes-file release-notes.md
+          gh release view nightly >/dev/null 2>&1 || gh release create nightly --title "Nightly" --notes-file release-notes.md
+          gh release edit nightly --title "Nightly" --notes-file release-notes.md
           gh release upload nightly output/GakumasTranslationData.zip --clobber
