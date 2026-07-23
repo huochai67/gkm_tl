@@ -12,3 +12,6 @@ wheels/
 # Runtime Cache
 cache
 output
+
+# Local configuration
+config.yaml
