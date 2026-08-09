@@ -39,12 +39,19 @@ jobs:
         run: uv run python -m unittest discover -s tests
 
       - name: Build nightly package
+        id: build
         run: |
           cp config.yaml.example config.yaml
           export BUILD_VERSION="nightly-$(date +%F)"
           uv run python run.py
+          if [ -f cache/nothing_to_translate ]; then
+            echo "has_new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_new=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Generate release notes
+        if: steps.build.outputs.has_new == 'true'
         run: |
           upstream_version="$(tr -d '\r\n' < cache/mod/version.txt)"
           octo_revision="$(uv run python -c 'import json; print(json.load(open("cache/server/octo_index.json", encoding="utf-8"))["revision"])')"
@@ -58,6 +65,7 @@ jobs:
           EOF
 
       - name: Publish nightly release
+        if: steps.build.outputs.has_new == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

@@ -232,8 +232,13 @@ def main():
             json.dumps(extract, ensure_ascii=False, indent=1), encoding="utf-8"
         )
         _clear_checkpoint()
+        (CACHE / "nothing_to_translate").write_text("", encoding="utf-8")
         print("Nothing to translate.", flush=True)
         sys.exit(0)
+
+    marker = CACHE / "nothing_to_translate"
+    if marker.exists():
+        marker.unlink()
 
     # group & batch
     groups: dict[str, list] = {}

@@ -224,6 +224,48 @@ class ResourceRegressionTests(unittest.TestCase):
         self.assertTrue(translate._should_translate(new, True))
 
 
+class TranslateSkipMarkerTests(unittest.TestCase):
+    def _prepare(self, items, with_stale_marker=False):
+        translate = _load_stage("03_translate")
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        cache_dir = Path(directory.name) / "cache"
+        cache_dir.mkdir()
+        (cache_dir / "extract.json").write_text(
+            json.dumps(items, ensure_ascii=False), encoding="utf-8"
+        )
+        marker = cache_dir / "nothing_to_translate"
+        if with_stale_marker:
+            marker.write_text("", encoding="utf-8")
+        translate.load_config = lambda: {
+            "llm": {"skip_changed": True, "batch_size": 20, "max_concurrent": 5}
+        }
+        translate.resolve_paths = lambda cfg: {"server_cache": cache_dir / "server"}
+        return translate, marker
+
+    def test_nothing_to_translate_writes_skip_marker(self):
+        translate, marker = self._prepare(
+            [{"uid": "adv_x:1", "status": "existing", "cn": "旧译文"}]
+        )
+
+        with self.assertRaises(SystemExit) as cm:
+            translate.main()
+
+        self.assertEqual(cm.exception.code, 0)
+        self.assertTrue(marker.exists())
+
+    def test_pending_translation_removes_stale_skip_marker(self):
+        translate, marker = self._prepare(
+            [{"uid": "adv_x:1", "status": "new", "category": "master", "jp": "こんにちは"}],
+            with_stale_marker=True,
+        )
+        translate.translate_group = lambda group: {group[0]["uid"]: "你好"}
+
+        translate.main()
+
+        self.assertFalse(marker.exists())
+
+
 class LocalizationRegressionTests(unittest.TestCase):
     def test_japanese_localization_is_translated_and_chinese_is_preserved(self):
         with tempfile.TemporaryDirectory() as directory:
