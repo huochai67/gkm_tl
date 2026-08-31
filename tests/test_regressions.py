@@ -48,9 +48,55 @@ class ResourceRegressionTests(unittest.TestCase):
 
         self.assertEqual(
             built,
-            "[choicegroup text=<r\\=選択肢1>选项1</r> "
-            "text=<r\\=選択肢2>选项2</r> "
-            "text=<r\\=選択肢3>选项3</r>]",
+            "[choicegroup text=选项1 text=选项2 text=选项3]",
+        )
+
+    def test_build_choicegroup_nested_choice_uses_plain_chinese(self):
+        line = (
+            "[choicegroup choices=[choice text=よく似合っています] "
+            r"clip=\{...\}]"
+        )
+
+        built = build_resource_line(line, {"text[0]": "很适合你"})
+
+        self.assertEqual(
+            built,
+            "[choicegroup choices=[choice text=很适合你] "
+            r"clip=\{...\}]",
+        )
+
+    def test_build_choicegroup_multiline_keeps_literal_newline(self):
+        line = (
+            r"[choicegroup choices=[choice text=ダンスが\n上手い] "
+            "choices=[choice text=可愛い] clip=none]"
+        )
+
+        built = build_resource_line(
+            line,
+            {"text[0]": r"跳舞\n很棒", "text[1]": "很可爱"},
+        )
+
+        self.assertEqual(
+            built,
+            r"[choicegroup choices=[choice text=跳舞\n很棒] "
+            "choices=[choice text=很可爱] clip=none]",
+        )
+
+    def test_build_choicegroup_preserves_nested_choice_attributes(self):
+        line = (
+            "[choicegroup choices=[choice text=頑張れ hideMessage=true] "
+            "choices=[choice text=いつも通りに] clip=none]"
+        )
+
+        built = build_resource_line(
+            line,
+            {"text[0]": "加油", "text[1]": "像平常一样"},
+        )
+
+        self.assertEqual(
+            built,
+            "[choicegroup choices=[choice text=加油 hideMessage=true] "
+            "choices=[choice text=像平常一样] clip=none]",
         )
 
     def test_build_wraps_multiline_as_multi_segment(self):

@@ -65,6 +65,11 @@ def _extract_all_kv(body: str) -> dict[str, str]:
             i = j
     return result
 
+# Choice text ends at the next key, or at the ] that closes nested [choice ...].
+_RE_CHOICE_TEXT = re.compile(
+    r"text=(.*?)(?=\](?=\s+[a-zA-Z_]\w*=|$)|(?:\s+(?:text=|[a-zA-Z_]\w*=)|$))"
+)
+
 def extract_resource_text(filepath: Path) -> list[dict]:
     text = filepath.read_text(encoding="utf-8")
     results = []
@@ -85,15 +90,10 @@ def extract_resource_text(filepath: Path) -> list[dict]:
             if "name" in kv and cmd == "message":
                 results.append({"line": line_no, "command": cmd, "field": "name", "jp": kv["name"]})
         elif cmd == "choicegroup":
-            choices = re.findall(
-                r"text=(.*?)(?:\](?=\s+[a-zA-Z_]\w*=|$)|(?=\s+(?:text=|[a-zA-Z_]\w*=)|$))",
-                body,
-            )
+            choices = _RE_CHOICE_TEXT.findall(body)
             for ci, ct in enumerate(choices):
                 results.append({"line": line_no, "command": "choice", "field": f"text[{ci}]", "jp": ct})
     return results
-
-_RE_CHOICE_TEXT = re.compile(r"text=(.*?)(?=\s+(?:text=|[a-zA-Z_]\w*=)|$)")
 
 
 def _normalize_resource_translation(cn: str) -> str:
@@ -117,15 +117,14 @@ def wrap_resource_translation(jp: str, cn: str) -> str:
 
 
 def _replace_choice_texts(body: str, translations: dict[int, str]) -> str:
-    """Insert translations for indexed choicegroup text values in one pass."""
+    """Replace indexed choicegroup text with plain Chinese, matching the upstream mod."""
     index = 0
 
     def replace(match: re.Match) -> str:
         nonlocal index
-        jp = match.group(1)
         cn = translations.get(index)
         index += 1
-        return f"text={wrap_resource_translation(jp, cn)}" if cn else match.group(0)
+        return f"text={_normalize_resource_translation(cn)}" if cn else match.group(0)
 
     return _RE_CHOICE_TEXT.sub(replace, body)
 
