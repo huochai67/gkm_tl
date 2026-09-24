@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from lib.text_utils import contains_japanese
+from lib.text_utils import contains_japanese, looks_like_japanese_source
 
 def extract_generic_text(mod_generic_dir: Path) -> list[dict]:
     results = []
@@ -9,6 +9,9 @@ def extract_generic_text(mod_generic_dir: Path) -> list[dict]:
         rel = fp.relative_to(mod_generic_dir.parent.parent)
         for key, val in data.items():
             if isinstance(val, str) and contains_japanese(key):
+                # A value that is empty or still Japanese has no usable
+                # translation; only those entries go to the LLM.
+                status = "new" if not val.strip() or looks_like_japanese_source(val) else "existing"
                 results.append({
                     "uid": f"generic:{rel}:{key}",
                     "category": "generic",
@@ -16,6 +19,6 @@ def extract_generic_text(mod_generic_dir: Path) -> list[dict]:
                     "field": key,
                     "jp": key,
                     "existing_cn": val,
-                    "status": "existing",
+                    "status": status,
                 })
     return results

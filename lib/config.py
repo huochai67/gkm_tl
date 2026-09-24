@@ -5,6 +5,26 @@ from ruamel.yaml import YAML
 DEFAULT_CONFIG = str(Path(__file__).parent.parent / "config.yaml")
 PROJECT_ROOT = Path(__file__).parent.parent
 
+LLM_DEFAULTS = {
+    "backend": "openai",
+    "max_tokens": 4096,
+    "batch_size": 20,
+    "max_concurrent": 5,
+    "timeout": 180,
+    "temperature": 0.2,
+    "skip_changed": True,
+}
+
+
+def _parse_bool(value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"expected a boolean, got {value!r}")
+
+
 _ENV_TO_LLM = {
     "LLM_BACKEND": ("backend", str),
     "LLM_BASE_URL": ("base_url", str),
@@ -14,6 +34,8 @@ _ENV_TO_LLM = {
     "LLM_BATCH_SIZE": ("batch_size", int),
     "LLM_MAX_CONCURRENT": ("max_concurrent", int),
     "LLM_TIMEOUT": ("timeout", int),
+    "LLM_TEMPERATURE": ("temperature", float),
+    "LLM_SKIP_CHANGED": ("skip_changed", _parse_bool),
 }
 
 def load_config(path: str = DEFAULT_CONFIG) -> dict:
@@ -29,8 +51,8 @@ def load_config(path: str = DEFAULT_CONFIG) -> dict:
                 llm[cfg_key] = cast(val)
             except ValueError as exc:
                 raise ValueError(f"Invalid value for {env_key}: {val!r}") from exc
-    llm.setdefault("backend", "openai")
-    llm.setdefault("skip_changed", True)
+    for key, default in LLM_DEFAULTS.items():
+        llm.setdefault(key, default)
     return cfg
 
 

@@ -103,6 +103,7 @@ llm:
   batch_size: 20
   max_concurrent: 5
   timeout: 180
+  temperature: 0.2 # 低温确定性输出；不支持该参数的后端会自动忽略
   skip_changed: true # 设为 false 可重新翻译日文原文发生变更的条目
 ```
 
@@ -144,6 +145,7 @@ uv run python stages/05_package.py    # 阶段 5: 打包生成 ZIP
 | | `batch_size` | integer | 单个 Prompt 包含的待翻译条目数量（默认 `20`） |
 | | `max_concurrent` | integer | 翻译并发请求线程数（默认 `5`） |
 | | `timeout` | integer | 请求超时时间（秒，默认 `180`） |
+| | `temperature` | number | 采样温度（默认 `0.2`，低温提升批量输出稳定性） |
 | | `skip_changed` | boolean | 是否跳过原文发生变更但已有旧翻译的条目（默认 `true`） |
 | **`paths`** | `server_cache` | string | Octo 服务器原始资源下载目录（默认 `cache/server`） |
 | | `mod_cache` | string | 上游 Release 翻译模版目录（默认 `cache/mod`） |
@@ -170,6 +172,8 @@ uv run python stages/05_package.py    # 阶段 5: 打包生成 ZIP
 | `LLM_BATCH_SIZE` | `llm.batch_size` | 批处理条目数 |
 | `LLM_MAX_CONCURRENT` | `llm.max_concurrent`| 并发请求数 |
 | `LLM_TIMEOUT` | `llm.timeout` | 请求超时（秒） |
+| `LLM_TEMPERATURE` | `llm.temperature` | 采样温度（浮点数） |
+| `LLM_SKIP_CHANGED` | `llm.skip_changed` | 是否跳过 `changed` 条目（`1/0`、`true/false` 等） |
 | `BUILD_VERSION` | `version.txt` | 构建版本号（默认自动生成为 `auto-YYYY-MM-DD`） |
 
 ---

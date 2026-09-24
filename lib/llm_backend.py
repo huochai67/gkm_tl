@@ -16,13 +16,18 @@ class OpenAIBackend(LLMBackend):
     def translate(self, prompt: str) -> str:
         base = self.cfg["base_url"].rstrip("/")
         url = base if base.endswith("/v1/chat/completions") else f"{base}/chat/completions"
+        payload = {
+            "model": self.cfg["model"],
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if self.cfg.get("max_tokens"):
+            payload["max_tokens"] = self.cfg["max_tokens"]
+        if self.cfg.get("temperature") is not None:
+            payload["temperature"] = self.cfg["temperature"]
         resp = requests.post(
             url,
             headers={"Authorization": f"Bearer {self.cfg['api_key']}"},
-            json={
-                "model": self.cfg["model"],
-                "messages": [{"role": "user", "content": prompt}],
-            },
+            json=payload,
             timeout=self.cfg.get("timeout", 180),
         )
         resp.raise_for_status()
@@ -47,6 +52,13 @@ class AnthropicBackend(LLMBackend):
     def translate(self, prompt: str) -> str:
         base = self.cfg["base_url"].rstrip("/")
         url = f"{base}/v1/messages"
+        payload = {
+            "model": self.cfg["model"],
+            "max_tokens": self.cfg.get("max_tokens", 4096),
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if self.cfg.get("temperature") is not None:
+            payload["temperature"] = self.cfg["temperature"]
         resp = requests.post(
             url,
             headers={
@@ -54,11 +66,7 @@ class AnthropicBackend(LLMBackend):
                 "anthropic-version": self.api_version,
                 "Content-Type": "application/json",
             },
-            json={
-                "model": self.cfg["model"],
-                "max_tokens": self.cfg.get("max_tokens", 4096),
-                "messages": [{"role": "user", "content": prompt}],
-            },
+            json=payload,
             timeout=self.cfg.get("timeout", 180),
         )
         resp.raise_for_status()

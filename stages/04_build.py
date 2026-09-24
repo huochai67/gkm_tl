@@ -94,7 +94,8 @@ def _apply_generic(items: list) -> int:
         by_file.setdefault(item["file"], []).append(item)
 
     for fname, file_items in by_file.items():
-        fp = OUT / "local-files" / fname
+        # item["file"] is already relative to the output root (local-files/...).
+        fp = OUT / fname
         if not fp.exists():
             continue
         data = json.loads(fp.read_text(encoding="utf-8"))
@@ -159,7 +160,13 @@ def _apply_localization(items: list) -> int:
         cn = item.get("cn") or item.get("existing_cn") or ""
         if not cn:
             continue
-        if _set_path(data, item["field"], cn):
+        field = item["field"]
+        # The mod stores localization as flat dotted keys; only fall back to
+        # nested traversal when no literal key exists.
+        if isinstance(data, dict) and field in data:
+            data[field] = cn
+            count += 1
+        elif _set_path(data, field, cn):
             count += 1
     fp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return count

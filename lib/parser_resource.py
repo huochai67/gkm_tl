@@ -85,8 +85,11 @@ def extract_resource_text(filepath: Path) -> list[dict]:
         kv = _extract_all_kv(body)
 
         if cmd in ("message", "narration", "title"):
-            if "text" in kv:
-                results.append({"line": line_no, "command": cmd, "field": "text", "jp": kv["text"]})
+            # title commands carry their source text in title=, all others in text=.
+            # Both are exposed under the shared field="text" contract.
+            src_field = "title" if cmd == "title" else "text"
+            if src_field in kv:
+                results.append({"line": line_no, "command": cmd, "field": "text", "jp": kv[src_field]})
             if "name" in kv and cmd == "message":
                 results.append({"line": line_no, "command": cmd, "field": "name", "jp": kv["name"]})
         elif cmd == "choicegroup":
@@ -133,6 +136,9 @@ def build_resource_line(orig_line: str, translations: dict[str, str]) -> str:
     cmd_m = re.match(r"(\[\w+\s+)(.*)(\])", orig_line.strip())
     if not cmd_m: return orig_line
     prefix, body, suffix = cmd_m.group(1), cmd_m.group(2), cmd_m.group(3)
+    cmd = re.match(r"\[(\w+)", prefix).group(1)
+    # title commands store their source text in title=, everything else in text=.
+    src_field = "title" if cmd == "title" else "text"
     kv = _extract_all_kv(body)
 
     indexed = {}
@@ -149,11 +155,14 @@ def build_resource_line(orig_line: str, translations: dict[str, str]) -> str:
 
     for field, cn in plain.items():
         if field == "text" and cn:
-            jp = kv.get("text", "")
-            if jp:
-                old = f"text={jp}"
-                new = f"text={wrap_resource_translation(jp, cn)}"
-                body = body.replace(old, new, 1)
+            jp = kv.get(src_field, "")
+            # A line without the matching source field is left untouched
+            # instead of gaining an empty replacement field.
+            if not jp:
+                continue
+            old = f"{src_field}={jp}"
+            new = f"{src_field}={wrap_resource_translation(jp, cn)}"
+            body = body.replace(old, new, 1)
         elif field == "name" and cn:
             old = f"name={kv.get('name', '')}"
             new = f"name={cn}"

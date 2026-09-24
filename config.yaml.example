@@ -7,6 +7,9 @@ llm:
   batch_size: 20
   max_concurrent: 5
   timeout: 180
+  # Low temperature keeps batch output deterministic. Backends that reject the
+  # field ignore it; max_tokens is always sent.
+  temperature: 0.2
   # Set false to retranslate entries whose source Japanese changed.
   skip_changed: true
 
