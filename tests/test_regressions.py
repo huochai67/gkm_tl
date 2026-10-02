@@ -924,6 +924,15 @@ class TranslateParseTests(unittest.TestCase):
             {"a:1:text": "你好", "b:2:text": "世界"},
         )
 
+    def test_uid_crlf_is_matched_against_lf_response(self):
+        uid = "generic:file:第一行\r\n第二行\r\n"
+        content = "[generic:file:第一行\n第二行\n] 第一行\n第二行"
+
+        self.assertEqual(
+            self.translate._parse_translations(content, [{"uid": uid}]),
+            {uid: "第一行\n第二行"},
+        )
+
     def test_positional_response_is_rejected(self):
         self.assertEqual(
             self.translate._parse_translations("你好\n---\n世界", self.group), {}
@@ -984,6 +993,15 @@ class TranslateValidationTests(unittest.TestCase):
                 item, r"前排的那些人，\n是麻央的朋友吗？ {user}"
             )
         )
+
+    def test_generic_terminal_line_ending_is_structural(self):
+        item = {
+            "uid": "generic:file:歌词\r\n",
+            "category": "generic",
+            "jp": "歌词\r\n",
+        }
+
+        self.assertIsNone(self.translate._validate_translation(item, "歌词"))
 
     def test_actual_newline_is_rejected(self):
         item = self._resource(r"前列にいるのは、\n麻央さん")

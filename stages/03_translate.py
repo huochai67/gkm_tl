@@ -212,6 +212,10 @@ _SEPARATOR_LINE_RE = re.compile(r"(?m)^[ \t]*-{3,}[ \t]*$")
 _TRAILING_SEPARATOR_RE = re.compile(r"[ \t]*-{3,}[ \t]*$")
 _LINE_START_BRACKET_RE = re.compile(r"(?m)^[ \t]*(\[)")
 _FENCE_RE = re.compile(r"```[^\n`]*\r?\n(.*?)\r?\n?```", re.S)
+def _canonical_uid(uid: str) -> str:
+    """Normalize line endings in transport UIDs without changing stored UIDs."""
+    return uid.replace("\r\n", "\n").replace("\r", "\n")
+
 
 
 def _parse_translations(content: str, group: list[dict]) -> dict[str, str]:
@@ -223,16 +227,26 @@ def _parse_translations(content: str, group: list[dict]) -> dict[str, str]:
     uids = [item["uid"] for item in group]
     if not content or not uids:
         return {}
+    uid_by_canonical: dict[str, str] = {}
+    for uid in uids:
+        canonical_uid = _canonical_uid(uid)
+        previous = uid_by_canonical.get(canonical_uid)
+        if previous is not None and previous != uid:
+            return {}
+        uid_by_canonical[canonical_uid] = uid
     text = content.strip()
     fence = _FENCE_RE.fullmatch(text)
     if fence:
         text = fence.group(1).strip()
+    text = _canonical_uid(text)
     text = _SEPARATOR_LINE_RE.sub("", text).strip()
     if not text:
         return {}
 
     known_re = re.compile(
-        r"\[(" + "|".join(re.escape(uid) for uid in sorted(set(uids), key=len, reverse=True)) + r")\]"
+        r"\[(" + "|".join(
+            re.escape(uid) for uid in sorted(uid_by_canonical, key=len, reverse=True)
+        ) + r")\]"
     )
     marks = [(m.start(), m.end(), m.group(1)) for m in known_re.finditer(text)]
     if not marks:
@@ -250,9 +264,9 @@ def _parse_translations(content: str, group: list[dict]) -> dict[str, str]:
         bodies.setdefault(uid, []).append(body)
 
     parsed: dict[str, str] = {}
-    for uid, bodies_per_uid in bodies.items():
+    for canonical_uid, bodies_per_uid in bodies.items():
         if len(bodies_per_uid) == 1 and bodies_per_uid[0]:
-            parsed[uid] = bodies_per_uid[0]
+            parsed[uid_by_canonical[canonical_uid]] = bodies_per_uid[0]
     return parsed
 
 
@@ -270,6 +284,11 @@ def _validate_translation(item: dict, cn: str) -> str | None:
     if not cn.strip():
         return "空译文"
     jp = item.get("jp", "")
+    if item.get("category") == "generic":
+        if jp.endswith("\r\n"):
+            jp = jp[:-2]
+        elif jp.endswith(("\r", "\n")):
+            jp = jp[:-1]
     if _canonical_newlines(cn).count("\n") != _canonical_newlines(jp).count("\n"):
         return "换行数量与原文不一致（原文中的字面 \\n 必须原样保留）"
     if jp.count(r"\n") != cn.count(r"\n"):

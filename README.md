@@ -60,6 +60,8 @@ flowchart LR
 | **Stage 4: 构建** | `stages/04_build.py` | 按照插件规范重构完整目录结构：<br/>• `resource/*.txt`：`message`/`narration`/`title` 替换为 `text=<r\=日文原文>中文翻译</r>`，`choicegroup` 直接替换为中文（与上游模版一致），角色名替换为中文。<br/>• `masterTrans/*.json`：合并翻译并更新 Master 源文本快照。<br/>• `genericTrans/*.json` 与 `localization.json`：写回翻译字段。<br/>• 写入 `version.txt` 构建版本号。 | `output/GakumasTranslationData/`<br/>`cache/master_source_snapshot.json` |
 | **Stage 5: 打包** | `stages/05_package.py` | 将构建目录打包为 `GakumasTranslationData.zip`，显式包含 `local-files/` 目录项以确保汉化插件能正确识别。 | `output/GakumasTranslationData.zip` |
 
+Stage 3 严格按 UID 匹配响应，但兼容 UID 内的 CRLF/CR/LF 换行差异；Checkpoint 保留原始 UID。Generic 键末尾的一个实际换行视为结构性行结束符，不计入译文换行校验，内部换行仍须保持。
+
 ---
 
 ## 🚀 快速开始
