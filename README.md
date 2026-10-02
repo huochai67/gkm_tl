@@ -11,7 +11,7 @@
 - **自动化资源抓取** — 对接游戏官方 Octo 资源服务器，支持 Protobuf 数据库解析与 AES-CBC 解密，多线程高速下载最新的剧情脚本 (`adv_*.txt`)；自动同步上游最新 Release 模版与 Master 差分数据库。
 - **高精度增量差分** — 覆盖 4 类游戏文本格式，通过多级 UID 与内容快照机制精准识别 `new`（新增）、`existing`（已翻译且未变更）和 `changed`（日文原文更新）条目，杜绝重复翻译与 Token 浪费。
 - **多源汉化回退机制** — 优先使用上游 Release 翻译，缺失条目自动回退至 Nightly 补充模版，保证翻译覆盖率最大化。
-- **多 LLM 后端与上下文感知** — 支持标准 **OpenAI 兼容 API** 与 **Anthropic Claude API**；根据剧情类别、角色、章节及卡面信息动态组装上下文 Prompt，内置 15 位偶像官方译名映射。
+- **OpenAI 兼容 API 与上下文感知** — 支持标准 OpenAI-compatible 接口、`reasoning_effort` 思考等级和批量翻译；根据剧情类别、角色、章节及卡面信息动态组装上下文 Prompt，内置 15 位偶像官方译名映射。
 - **高并发与断点续传** — 支持配置批量大小（`batch_size`）与并发线程数（`max_concurrent`）；内置 Checkpoint 机制，翻译中断后可零成本无缝恢复。
 - **零额外开销与无缝打包** — 若提取阶段检测到无新增待翻译文本，自动跳过后续阶段；构建阶段生成完全兼容 [chinosk6/GakumasTranslationData](https://github.com/chinosk6/GakumasTranslationData) 的标准目录结构与 ZIP 归档。
 - **开箱即用的 CI/CD** — 内置 GitHub Actions Nightly 工作流，每日自动定时检查游戏更新、运行测试套件并自动构建与发布 Release。
@@ -97,7 +97,6 @@ Copy-Item config.yaml.example config.yaml
 
 ```yaml
 llm:
-  backend: openai # 支持 openai 或 anthropic
   base_url: "https://api.openai.com/v1"
   api_key: "sk-your-api-key"
   model: "gpt-4o-mini"
@@ -105,7 +104,8 @@ llm:
   batch_size: 20
   max_concurrent: 5
   timeout: 180
-  temperature: 0.2 # 低温确定性输出；不支持该参数的后端会自动忽略
+  temperature: 0.2 # 未设置 reasoning_effort 时使用；思考模式下由后端决定
+  reasoning_effort: null # none/minimal/low/medium/high；留空使用模型默认
   skip_changed: true # 设为 false 可重新翻译日文原文发生变更的条目
 ```
 
@@ -139,15 +139,15 @@ uv run python stages/05_package.py    # 阶段 5: 打包生成 ZIP
 
 | 配置模块 | 字段 | 类型 | 说明 |
 | :--- | :--- | :--- | :--- |
-| **`llm`** | `backend` | string | LLM 后端类型：`openai`（默认）或 `anthropic` |
-| | `base_url` | string | API 请求基础地址（例如 `https://api.openai.com/v1`） |
+| **`llm`** | `base_url` | string | API 请求基础地址（例如 `https://api.openai.com/v1`） |
 | | `api_key` | string | API 密钥 |
-| | `model` | string | 调用的模型名称（例如 `gpt-4o-mini`, `claude-3-5-sonnet-20241022`） |
+| | `model` | string | 调用的模型名称（例如 `gpt-4o-mini`, `gemini-3.8-flash`） |
 | | `max_tokens` | integer | 单次请求最大生成 Token 数（默认 `4096`） |
 | | `batch_size` | integer | 单个 Prompt 包含的待翻译条目数量（默认 `20`） |
 | | `max_concurrent` | integer | 翻译并发请求线程数（默认 `5`） |
 | | `timeout` | integer | 请求超时时间（秒，默认 `180`） |
 | | `temperature` | number | 采样温度（默认 `0.2`，低温提升批量输出稳定性） |
+| | `reasoning_effort` | string/null | OpenAI-compatible 思考等级：`none`、`minimal`、`low`、`medium` 或 `high`；默认使用模型设置 |
 | | `skip_changed` | boolean | 是否跳过原文发生变更但已有旧翻译的条目（默认 `true`） |
 | **`paths`** | `server_cache` | string | Octo 服务器原始资源下载目录（默认 `cache/server`） |
 | | `mod_cache` | string | 上游 Release 翻译模版目录（默认 `cache/mod`） |
@@ -166,7 +166,6 @@ uv run python stages/05_package.py    # 阶段 5: 打包生成 ZIP
 
 | 环境变量 | 覆盖配置项 | 说明 |
 | :--- | :--- | :--- |
-| `LLM_BACKEND` | `llm.backend` | LLM 后端 (`openai` / `anthropic`) |
 | `LLM_BASE_URL` | `llm.base_url` | API Base URL |
 | `LLM_API_KEY` | `llm.api_key` | API Key |
 | `LLM_MODEL` | `llm.model` | 模型名称 |
@@ -175,6 +174,7 @@ uv run python stages/05_package.py    # 阶段 5: 打包生成 ZIP
 | `LLM_MAX_CONCURRENT` | `llm.max_concurrent`| 并发请求数 |
 | `LLM_TIMEOUT` | `llm.timeout` | 请求超时（秒） |
 | `LLM_TEMPERATURE` | `llm.temperature` | 采样温度（浮点数） |
+| `LLM_REASONING_EFFORT` | `llm.reasoning_effort` | 思考等级（`none` / `minimal` / `low` / `medium` / `high`） |
 | `LLM_SKIP_CHANGED` | `llm.skip_changed` | 是否跳过 `changed` 条目（`1/0`、`true/false` 等） |
 | `BUILD_VERSION` | `version.txt` | 构建版本号（默认自动生成为 `auto-YYYY-MM-DD`） |
 
@@ -218,7 +218,7 @@ gkm-tl/
 │
 ├── lib/                       # 核心业务与解析库
 │   ├── config.py              # 配置加载与路径解析
-│   ├── llm_backend.py         # LLM 后端封装 (OpenAI / Anthropic)
+│   ├── llm_backend.py         # OpenAI-compatible LLM 封装与思考参数
 │   ├── octo.py                # Octo 客户端与资源解密
 │   ├── text_utils.py          # 日文字符与假名识别工具
 │   ├── parser_resource.py     # 冒险剧情脚本解析器

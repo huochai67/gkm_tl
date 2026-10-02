@@ -13,7 +13,7 @@ import requests
 
 import lib.octo as octo_module
 from lib.config import load_config
-from lib.llm_backend import AnthropicBackend, OpenAIBackend
+from lib.llm_backend import OpenAIBackend
 from lib.octo import OctoClient
 from lib.parser_generic import extract_generic_text
 from lib.parser_localization import extract_localization_text
@@ -1428,11 +1428,17 @@ class LLMConfigRegressionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = self._write_config(Path(directory), "llm:\n  temperature: 0.1\n  skip_changed: true\n")
             with patch.dict(
-                "os.environ", {"LLM_TEMPERATURE": "0.7", "LLM_SKIP_CHANGED": "false"}
+                "os.environ",
+                {
+                    "LLM_TEMPERATURE": "0.7",
+                    "LLM_REASONING_EFFORT": "high",
+                    "LLM_SKIP_CHANGED": "false",
+                },
             ):
                 config = load_config(str(path))
 
         self.assertEqual(config["llm"]["temperature"], 0.7)
+        self.assertEqual(config["llm"]["reasoning_effort"], "high")
         self.assertFalse(config["llm"]["skip_changed"])
 
     def test_quality_defaults_are_applied(self):
@@ -1443,6 +1449,7 @@ class LLMConfigRegressionTests(unittest.TestCase):
         self.assertEqual(config["llm"]["max_concurrent"], 5)
         self.assertEqual(config["llm"]["timeout"], 180)
         self.assertEqual(config["llm"]["max_tokens"], 4096)
+        self.assertIsNone(config["llm"]["reasoning_effort"])
         self.assertEqual(config["llm"]["temperature"], 0.2)
         self.assertTrue(config["llm"]["skip_changed"])
 
@@ -1450,6 +1457,13 @@ class LLMConfigRegressionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = self._write_config(Path(directory))
             with patch.dict("os.environ", {"LLM_SKIP_CHANGED": "maybe"}):
+                with self.assertRaises(ValueError):
+                    load_config(str(path))
+
+    def test_invalid_reasoning_effort_raises(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._write_config(Path(directory))
+            with patch.dict("os.environ", {"LLM_REASONING_EFFORT": "extreme"}):
                 with self.assertRaises(ValueError):
                     load_config(str(path))
 
@@ -1483,21 +1497,22 @@ class LLMBackendParamsTests(unittest.TestCase):
         self.assertEqual(captured["payload"]["max_tokens"], 123)
         self.assertEqual(captured["payload"]["temperature"], 0.2)
 
-    def test_anthropic_sends_max_tokens_and_temperature(self):
+    def test_openai_sends_reasoning_effort_without_temperature(self):
         captured, fake_post = self._capture_post(
-            {"content": [{"type": "text", "text": "ok"}]}
+            {"choices": [{"message": {"content": "ok"}}]}
         )
-        backend = AnthropicBackend({
-            "base_url": "https://example.invalid", "api_key": "secret",
-            "model": "m", "max_tokens": 123, "temperature": 0.2, "timeout": 5,
+        backend = OpenAIBackend({
+            "base_url": "https://example.invalid/v1", "api_key": "secret",
+            "model": "m", "max_tokens": 123, "temperature": 0.2,
+            "reasoning_effort": "low", "timeout": 5,
         })
 
         with patch("lib.llm_backend.requests.post", fake_post):
             self.assertEqual(backend.translate("hi"), "ok")
 
-        self.assertEqual(captured["url"], "https://example.invalid/v1/messages")
-        self.assertEqual(captured["payload"]["max_tokens"], 123)
-        self.assertEqual(captured["payload"]["temperature"], 0.2)
+        self.assertEqual(captured["payload"]["reasoning_effort"], "low")
+        self.assertNotIn("temperature", captured["payload"])
+
 
 
 if __name__ == "__main__":

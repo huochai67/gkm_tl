@@ -1,18 +1,11 @@
 import requests
-from abc import ABC, abstractmethod
 from lib.config import validate_llm_config
 
 
-class LLMBackend(ABC):
+class OpenAIBackend:
     def __init__(self, llm_cfg: dict):
         self.cfg = llm_cfg
 
-    @abstractmethod
-    def translate(self, prompt: str) -> str:
-        ...
-
-
-class OpenAIBackend(LLMBackend):
     def translate(self, prompt: str) -> str:
         base = self.cfg["base_url"].rstrip("/")
         url = base if base.endswith("/v1/chat/completions") else f"{base}/chat/completions"
@@ -22,7 +15,10 @@ class OpenAIBackend(LLMBackend):
         }
         if self.cfg.get("max_tokens"):
             payload["max_tokens"] = self.cfg["max_tokens"]
-        if self.cfg.get("temperature") is not None:
+        reasoning_effort = self.cfg.get("reasoning_effort")
+        if reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort
+        elif self.cfg.get("temperature") is not None:
             payload["temperature"] = self.cfg["temperature"]
         resp = requests.post(
             url,
@@ -44,52 +40,6 @@ class OpenAIBackend(LLMBackend):
             )
 
 
-class AnthropicBackend(LLMBackend):
-    def __init__(self, llm_cfg: dict):
-        super().__init__(llm_cfg)
-        self.api_version = llm_cfg.get("api_version", "2023-06-01")
-
-    def translate(self, prompt: str) -> str:
-        base = self.cfg["base_url"].rstrip("/")
-        url = f"{base}/v1/messages"
-        payload = {
-            "model": self.cfg["model"],
-            "max_tokens": self.cfg.get("max_tokens", 4096),
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        if self.cfg.get("temperature") is not None:
-            payload["temperature"] = self.cfg["temperature"]
-        resp = requests.post(
-            url,
-            headers={
-                "x-api-key": self.cfg["api_key"],
-                "anthropic-version": self.api_version,
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=self.cfg.get("timeout", 180),
-        )
-        resp.raise_for_status()
-        result = resp.json()
-        blocks = result.get("content") or []
-        if not blocks:
-            raise RuntimeError(f"Anthropic response missing content: {result}")
-        for block in blocks:
-            if isinstance(block, dict) and block.get("type") == "text":
-                return block.get("text", "").strip()
-        raise RuntimeError(
-            f"Anthropic response has no text block. "
-            f"Block types: {[b.get('type') if isinstance(b, dict) else type(b).__name__ for b in blocks]}. "
-            f"Full response keys: {list(result)}"
-        )
-
-
-def create_backend(config: dict) -> LLMBackend:
+def create_backend(config: dict) -> OpenAIBackend:
     validate_llm_config(config)
-    backend = config["llm"].get("backend", "openai")
-    if backend == "openai":
-        return OpenAIBackend(config["llm"])
-    elif backend == "anthropic":
-        return AnthropicBackend(config["llm"])
-    else:
-        raise ValueError(f"Unknown LLM backend: {backend!r}")
+    return OpenAIBackend(config["llm"])

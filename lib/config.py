@@ -6,12 +6,12 @@ DEFAULT_CONFIG = str(Path(__file__).parent.parent / "config.yaml")
 PROJECT_ROOT = Path(__file__).parent.parent
 
 LLM_DEFAULTS = {
-    "backend": "openai",
     "max_tokens": 4096,
     "batch_size": 20,
     "max_concurrent": 5,
     "timeout": 180,
     "temperature": 0.2,
+    "reasoning_effort": None,
     "skip_changed": True,
 }
 
@@ -25,8 +25,18 @@ def _parse_bool(value: str) -> bool:
     raise ValueError(f"expected a boolean, got {value!r}")
 
 
+def _parse_reasoning_effort(value: str) -> str | None:
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+    if normalized not in {"none", "minimal", "low", "medium", "high"}:
+        raise ValueError(
+            "expected one of none, minimal, low, medium, high"
+        )
+    return normalized
+
+
 _ENV_TO_LLM = {
-    "LLM_BACKEND": ("backend", str),
     "LLM_BASE_URL": ("base_url", str),
     "LLM_API_KEY": ("api_key", str),
     "LLM_MODEL": ("model", str),
@@ -35,6 +45,7 @@ _ENV_TO_LLM = {
     "LLM_MAX_CONCURRENT": ("max_concurrent", int),
     "LLM_TIMEOUT": ("timeout", int),
     "LLM_TEMPERATURE": ("temperature", float),
+    "LLM_REASONING_EFFORT": ("reasoning_effort", _parse_reasoning_effort),
     "LLM_SKIP_CHANGED": ("skip_changed", _parse_bool),
 }
 

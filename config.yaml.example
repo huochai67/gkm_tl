@@ -1,5 +1,4 @@
 llm:
-  backend: openai
   base_url: "https://api.openai.com/v1"
   api_key: ""
   model: "gpt-4o-mini"
@@ -10,6 +9,9 @@ llm:
   # Low temperature keeps batch output deterministic. Backends that reject the
   # field ignore it; max_tokens is always sent.
   temperature: 0.2
+  # OpenAI-compatible reasoning effort: none, minimal, low, medium, or high.
+  # Omit it to use the model/provider default.
+  reasoning_effort: null
   # Set false to retranslate entries whose source Japanese changed.
   skip_changed: true
 
