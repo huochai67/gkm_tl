@@ -4,7 +4,13 @@ from datetime import date
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import sys; sys.path.insert(0, str(Path(__file__).parent.parent))
 from lib.parser_resource import build_resource_line
+from lib.parser_master import (
+    index_master_records,
+    master_target_index,
+    primary_key_paths,
+)
 from lib.config import load_config, resolve_paths
+from lib.text_utils import LINE_BREAKS, repeated_source_end
 
 CACHE = Path("cache")
 MOD = CACHE / "mod"
@@ -67,25 +73,72 @@ def _apply_master(fname: str, items: list) -> int:
     data = json.loads(fp.read_text(encoding="utf-8"))
     count = 0
     records = data.get("data", [])
-    records_by_id = {record.get("id"): record for record in records}
+    # Match by the overlay's declared primary key. Positional matching corrupts
+    # every row after the first one the source and the overlay disagree on.
+    key_paths = primary_key_paths(data)
+    positions = index_master_records(records, key_paths)
+    records_by_id = {
+        record.get("id"): record for record in records if record.get("id")
+    }
+    unmatched = 0
     for item in items:
-        # The extraction UID stores the source record index. It is required for
-        # id-less records and avoids collisions in master files with duplicate IDs.
-        try:
-            record_index = int(item["uid"].split(":", 3)[2])
-        except (IndexError, ValueError):
-            record_index = -1
-        record = records[record_index] if 0 <= record_index < len(records) else None
-        if record is None:
+        cn = item.get("cn") or item.get("existing_cn") or ""
+        record = None
+        key = item.get("key")
+        if isinstance(key, list) and len(key) == len(key_paths):
+            # Rows with a duplicate primary key are told apart by their
+            # occurrence, recorded during extraction.
+            occurrence = item.get("key_occurrence")
+            occurrence = occurrence if isinstance(occurrence, int) else 0
+            position = master_target_index(positions, tuple(key), occurrence)
+            if position is not None:
+                record = records[position]
+        if record is None and item.get("record_id"):
             record = records_by_id.get(item["record_id"])
-        if record is not None:
-            cn = item.get("cn") or item.get("existing_cn") or ""
-            if not cn:
-                continue
-            record[item["field"]] = cn
-            count += 1
+        if record is None:
+            unmatched += 1 if cn else 0
+            continue
+        if not cn:
+            continue
+        record[item["field"]] = cn
+        count += 1
+    if unmatched:
+        print(
+            f"  [WARN] {fname}: {unmatched} translated items have no matching record",
+            flush=True,
+        )
     fp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     return count
+
+def _keeps_source_line(data: dict) -> bool:
+    r"""True when the file itself stores ``'<source line>\n<translation>'`` values.
+
+    The lyrics files keep the source line above the translation, so a newly
+    translated line must be wrapped the same way; other files (``index/*``)
+    store the translation alone.
+    """
+    total = 0
+    repeated = 0
+    for key, value in data.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        source = key.rstrip("\r\n")
+        if not source or source == key:
+            continue
+        total += 1
+        if repeated_source_end(value, source) is not None:
+            repeated += 1
+    return total > 0 and repeated * 2 >= total
+
+
+def _lyric_value(key: str, cn: str, keeps_source_line: bool) -> str:
+    """Render one translated lyric value the way its file renders its entries."""
+    terminator = "\r\n" if key.endswith("\r\n") else "\n"
+    body = key.rstrip("\r\n")
+    if keeps_source_line:
+        return f"{body}\n{cn}{terminator}"
+    return f"{cn}{terminator}"
+
 
 def _apply_generic(items: list) -> int:
     count = 0
@@ -99,10 +152,14 @@ def _apply_generic(items: list) -> int:
         if not fp.exists():
             continue
         data = json.loads(fp.read_text(encoding="utf-8"))
+        keeps_source_line = _keeps_source_line(data)
         changed = False
         for item in file_items:
             if item["field"] in data:
-                cn = item.get("cn") or item.get("existing_cn") or ""
+                translated = item.get("cn")
+                if translated and item["field"].endswith(LINE_BREAKS):
+                    translated = _lyric_value(item["field"], translated, keeps_source_line)
+                cn = translated or item.get("existing_cn") or ""
                 if not cn:
                     continue
                 data[item["field"]] = cn
@@ -173,10 +230,12 @@ def _apply_localization(items: list) -> int:
 
 
 def _save_master_source_snapshot(items: list) -> None:
-    """Record source text only after its translated output has been built."""
+    """Record source text only after its translated output has been built.
+
+    The snapshot is rebuilt from this run so identities that no longer exist
+    (renamed records, an older UID scheme) do not linger.
+    """
     snapshot = {}
-    if MASTER_SOURCE_SNAPSHOT.exists():
-        snapshot = json.loads(MASTER_SOURCE_SNAPSHOT.read_text(encoding="utf-8"))
     for item in items:
         if item.get("cn"):
             snapshot[item["uid"]] = item["jp"]

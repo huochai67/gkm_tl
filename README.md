@@ -11,7 +11,7 @@
 - **自动化资源抓取** — 对接游戏官方 Octo 资源服务器，支持 Protobuf 数据库解析与 AES-CBC 解密，多线程高速下载最新的剧情脚本 (`adv_*.txt`)；自动同步上游最新 Release 模版与 Master 差分数据库。
 - **高精度增量差分** — 覆盖 4 类游戏文本格式，通过多级 UID 与内容快照机制精准识别 `new`（新增）、`existing`（已翻译且未变更）和 `changed`（日文原文更新）条目，杜绝重复翻译与 Token 浪费。
 - **多源汉化回退机制** — 优先使用上游 Release 翻译，缺失条目自动回退至 Nightly 补充模版，保证翻译覆盖率最大化。
-- **OpenAI 兼容 API 与上下文感知** — 支持标准 OpenAI-compatible 接口、`reasoning_effort` 思考等级和批量翻译；根据剧情类别、角色、章节及卡面信息动态组装上下文 Prompt，内置 15 位偶像官方译名映射。
+- **OpenAI 兼容 API 与结构化输出** — 支持标准 OpenAI-compatible 接口、`reasoning_effort` 思考等级与批量翻译；每次请求携带 `response_format: {"type": "json_schema", ...}`，模型按 `{"translations":[{"uid","translation"}]}` 返回译文，按 UID 对齐而非位置对齐。Prompt 会注入作品背景、角色中文名、字段语义、剧情上下文与既有译文参考，内置 15 位偶像官方译名映射。
 - **高并发与断点续传** — 支持配置批量大小（`batch_size`）与并发线程数（`max_concurrent`）；内置 Checkpoint 机制，翻译中断后可零成本无缝恢复。
 - **零额外开销与无缝打包** — 若提取阶段检测到无新增待翻译文本，自动跳过后续阶段；构建阶段生成完全兼容 [chinosk6/GakumasTranslationData](https://github.com/chinosk6/GakumasTranslationData) 的标准目录结构与 ZIP 归档。
 - **开箱即用的 CI/CD** — 内置 GitHub Actions Nightly 工作流，每日自动定时检查游戏更新、运行测试套件并自动构建与发布 Release。
@@ -55,12 +55,12 @@ flowchart LR
 | 阶段 | 脚本 | 职责与核心逻辑 | 产物 / 缓存 |
 | :--- | :--- | :--- | :--- |
 | **Stage 1: 下载** | `stages/01_download.py` | 1. 请求 Octo API 并解密获取资源清单，多线程下载 `adv_*.txt`。<br/>2. 下载 GitHub Release 现有中文模版。<br/>3. 下载 gkm_tl nightly 补充模版（可通过配置关闭）。<br/>4. 下载并解压 `gakumasu-diff` master 数据。 | `cache/server/`<br/>`cache/mod/`<br/>`cache/nightly/`<br/>`cache/gkm-diff/` |
-| **Stage 2: 提取** | `stages/02_extract.py` | 针对 4 种数据源进行提取与对比，建立唯一的条目 UID，标记 `new` / `existing` / `changed`：<br/>• **Resource**: 冒险脚本，提取 `message`/`narration`/`title`/`choicegroup`，支持 `<r\=JP>CN</r>` 语法。<br/>• **Master**: YAML 数据与快照比对，按记录顺序与 ID 双重匹配。<br/>• **Generic**: `genericTrans/**/*.json` 键值提取。<br/>• **Localization**: 递归提取 `localization.json` 并通过假名检测判定未翻译文本。 | `cache/extract.json` |
-| **Stage 3: 翻译** | `stages/03_translate.py` | 1. 筛选待翻译文本（默认仅翻译 `new`，可配置开启 `changed` 翻译）。<br/>2. 根据剧情上下文对条目分组并构建 Prompt，注入角色中文名。<br/>3. 线程池并发调用 LLM 进行翻译，实时保存 Checkpoint。<br/>4. 若无待翻译条目，生成 `cache/nothing_to_translate` 标记并提前结束。 | `cache/translated.json`<br/>`cache/translate_checkpoint.json` |
-| **Stage 4: 构建** | `stages/04_build.py` | 按照插件规范重构完整目录结构：<br/>• `resource/*.txt`：`message`/`narration`/`title` 替换为 `text=<r\=日文原文>中文翻译</r>`，`choicegroup` 直接替换为中文（与上游模版一致），角色名替换为中文。<br/>• `masterTrans/*.json`：合并翻译并更新 Master 源文本快照。<br/>• `genericTrans/*.json` 与 `localization.json`：写回翻译字段。<br/>• 写入 `version.txt` 构建版本号。 | `output/GakumasTranslationData/`<br/>`cache/master_source_snapshot.json` |
+| **Stage 2: 提取** | `stages/02_extract.py` | 针对 4 种数据源进行提取与对比，建立唯一的条目 UID，标记 `new` / `existing` / `changed`：<br/>• **Resource**: 冒险脚本，提取 `message`/`narration`/`title`/`choicegroup`，支持 `<r\=JP>CN</r>` 语法；`name` 与 choicegroup 的裸中文值同样视为既有译文。<br/>• **Master**: YAML 数据与快照比对，按 overlay 声明的复合主键（`rules.primaryKeys`，剔除无法标量求值的关系型路径）匹配记录，重复主键按出现次序区分；快照以稳定 UID 记录原文，用于识别 `changed`。<br/>• **Generic**: `genericTrans/**/*.json` 键值提取。<br/>• **Localization**: 递归提取 `localization.json` 并通过假名检测判定未翻译文本。<br/>所有条目附带 `hash`（uid 的 64 位十六进制摘要），作为翻译阶段的请求内短标识。 | `cache/extract.json` |
+| **Stage 3: 翻译** | `stages/03_translate.py` | 1. 筛选待翻译文本（默认仅翻译 `new`，可配置开启 `changed` 翻译）。<br/>2. 按 `类别:文件` 分组、按 `batch_size` 切批，组装含 `[任务]/[输出格式]/[规则]/[背景]/[本批上下文]/[参考译文]/[输入]` 的 Prompt（作品背景、角色中文名表、字段语义、场景与说话人）。<br/>3. 请求带 `response_format: {"type":"json_schema", "json_schema":{"name":"game_text_translations",...}}`，要求返回 `{"translations":[{"id","translation"}]}`，其中 `id` 是输入行 `[]` 内的短标识（`hash`）；解析按标识**严格**对齐而非按位置：标识必须逐字一致，未知/改写过的标识、重复标识与非法 JSON 一律拒绝。uid 只作为本地身份，不进入 Prompt。<br/>4. 失败逐级降级：整批 → 仅失败条目 repair → 单条重发；JSON 中转义歧义（原文的字面 `\n` 被模型写成真实换行）会按原文结构无损还原后再校验；线程池并发调用，实时保存 Checkpoint。<br/>5. 若无待翻译条目，生成 `cache/nothing_to_translate` 标记并提前结束。 | `cache/translated.json`<br/>`cache/translate_checkpoint.json` |
+| **Stage 4: 构建** | `stages/04_build.py` | 按照插件规范重构完整目录结构：<br/>• `resource/*.txt`：`message`/`narration`/`title` 替换为 `text=<r\=日文原文>中文翻译</r>`，`choicegroup` 与 `name` 沿用上游模版已有中文（与上游一致），`name` 缺失时回退到 `character_names` 全名。<br/>• `masterTrans/*.json`：按主键将译文写回 overlay 对应记录，并重建 Master 源文本快照。<br/>• `genericTrans/*.json` 与 `localization.json`：写回翻译字段；其中键以换行结尾的歌词条目（如 `lyrics/srt_live_*.json`）按文件自身既有条目的形态套回容器——多数文件为「源行 + `\n` + 译文 + 原行尾符」，`index/*` 等仅存译文的文件则不加源行。<br/>• 写入 `version.txt` 构建版本号。 | `output/GakumasTranslationData/`<br/>`cache/master_source_snapshot.json` |
 | **Stage 5: 打包** | `stages/05_package.py` | 将构建目录打包为 `GakumasTranslationData.zip`，显式包含 `local-files/` 目录项以确保汉化插件能正确识别。 | `output/GakumasTranslationData.zip` |
 
-Stage 3 严格按 UID 匹配响应，但兼容 UID 内的 CRLF/CR/LF 换行差异；Checkpoint 保留原始 UID。Generic 键末尾的一个实际换行视为结构性行结束符，不计入译文换行校验，内部换行仍须保持。
+Stage 3 用 `hash` 作为请求内标识：模型只需回抄 16 个十六进制字符，长键（歌词、词条）不再进入 Prompt——实测同一批次 Prompt 字符 −38~41%、输出 token −71%，长键被省略公共前缀、把字面 `\n` 改写成真实换行、回抄 `[]` 三类走样随之消失。UID 始终是 extract.json、Checkpoint、translated.json 与构建阶段的条目身份。Generic 键末尾的一个实际换行视为结构性行结束符，不计入译文换行校验，内部换行仍须保持；键以换行结尾的歌词条目，其响应中回抄的源行与行尾换行在写库前剥离，容器由 Stage 4 依据同文件既有条目的形态统一套回。
 
 ---
 
@@ -149,6 +149,7 @@ uv run python stages/05_package.py    # 阶段 5: 打包生成 ZIP
 | | `temperature` | number | 采样温度（默认 `0.2`，低温提升批量输出稳定性） |
 | | `reasoning_effort` | string/null | OpenAI-compatible 思考等级：`none`、`minimal`、`low`、`medium` 或 `high`；默认使用模型设置 |
 | | `skip_changed` | boolean | 是否跳过原文发生变更但已有旧翻译的条目（默认 `true`） |
+| | *(固定行为)* | — | 每次请求都携带 `response_format: {"type": "json_schema", "json_schema": {...}}`（`{"translations":[{"uid","translation"}]}`），要求服务端支持 OpenAI structured outputs；不支持时批次会失败并保留 Checkpoint。 |
 | **`paths`** | `server_cache` | string | Octo 服务器原始资源下载目录（默认 `cache/server`） |
 | | `mod_cache` | string | 上游 Release 翻译模版目录（默认 `cache/mod`） |
 | | `nightly_mod_cache` | string | 补充 Nightly 翻译模版目录（默认 `cache/nightly`） |

@@ -26,6 +26,14 @@ from lib.text_utils import looks_like_japanese_source
 PROJECT_ROOT = Path(__file__).parent.parent
 
 
+from lib.text_utils import uid_label
+
+
+def _uid_translations(*pairs: tuple[str, str]) -> str:
+    """Structured response keyed by the request label derived from each uid."""
+    return _json_translations(*((uid_label(uid), cn) for uid, cn in pairs))
+
+
 def _load_stage(name: str):
     path = PROJECT_ROOT / "stages" / f"{name}.py"
     spec = importlib.util.spec_from_file_location(name.replace("-", "_"), path)
@@ -265,6 +273,19 @@ class ResourceRegressionTests(unittest.TestCase):
             (r"立つ鳥跡を濁さず\nから", r"源于谚语“立つ鳥跡を濁さず”\n的关系"),
         )
 
+    def test_plain_chinese_name_is_an_existing_translation(self):
+        extract = _load_stage("02_extract")
+        # The mod stores display names unwrapped; the upstream value wins over
+        # the character_names fallback.
+        self.assertEqual(
+            extract._get_existing_resource_translation("name", "琴音", "ことね"),
+            ("ことね", "琴音"),
+        )
+        self.assertEqual(
+            extract._get_existing_resource_translation("name", "ことね", "ことね"),
+            ("ことね", ""),
+        )
+
     def test_changed_translation_is_skipped_by_default(self):
         translate = _load_stage("03_translate")
         changed = {"status": "changed"}
@@ -340,7 +361,7 @@ class LocalizationRegressionTests(unittest.TestCase):
 
 
 class MasterRegressionTests(unittest.TestCase):
-    def test_master_uses_record_index_for_duplicate_ids(self):
+    def test_master_pairs_duplicate_ids_by_occurrence(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             yaml_dir = root / "yaml"
@@ -362,8 +383,94 @@ class MasterRegressionTests(unittest.TestCase):
             items = extract_master_text(yaml_dir, mod_dir)
 
         self.assertEqual([item["existing_cn"] for item in items], ["译文一", "译文二"])
+        self.assertEqual([item["uid"] for item in items],
+                         ["master:sample:repeated#0:name", "master:sample:repeated#1:name"])
 
-    def test_build_master_uses_record_index_for_idless_and_duplicate_records(self):
+    def test_master_matches_records_by_key_not_position(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            yaml_dir = root / "yaml"
+            mod_dir = root / "mod"
+            yaml_dir.mkdir()
+            mod_dir.mkdir()
+            # The overlay holds a row the source no longer has, exactly what
+            # happens after a master update. Positional matching would pair
+            # every later row with its neighbour.
+            (yaml_dir / "sample.yaml").write_text(
+                "- id: a\n  name: 原文A\n- id: c\n  name: 原文C\n",
+                encoding="utf-8",
+            )
+            (mod_dir / "sample.json").write_text(
+                json.dumps(
+                    {"rules": {"primaryKeys": ["id"]},
+                     "data": [{"id": "a", "name": "译文A"}, {"id": "b", "name": "译文B"},
+                              {"id": "c", "name": "译文C"}]},
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            items = extract_master_text(yaml_dir, mod_dir)
+
+        self.assertEqual([item["existing_cn"] for item in items], ["译文A", "译文C"])
+        self.assertEqual([item["uid"] for item in items], ["master:sample:a:name", "master:sample:c:name"])
+
+    def test_master_uses_composite_primary_keys_without_id_field(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            yaml_dir = root / "yaml"
+            mod_dir = root / "mod"
+            yaml_dir.mkdir()
+            mod_dir.mkdir()
+            (yaml_dir / "sample.yaml").write_text(
+                "- supportCardId: card-1\n  number: 1\n  text: 原文一\n"
+                "- supportCardId: card-1\n  number: 2\n  text: 原文二\n",
+                encoding="utf-8",
+            )
+            (mod_dir / "sample.json").write_text(
+                json.dumps(
+                    {"rules": {"primaryKeys": ["supportCardId", "number"]},
+                     "data": [{"supportCardId": "card-0", "number": 9, "text": "旧卡"},
+                              {"supportCardId": "card-1", "number": 1, "text": "译文一"},
+                              {"supportCardId": "card-1", "number": 2, "text": "译文二"}]},
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            items = extract_master_text(yaml_dir, mod_dir)
+
+        self.assertEqual([item["existing_cn"] for item in items], ["译文一", "译文二"])
+        self.assertEqual([item["uid"] for item in items],
+                         ["master:sample:card-1|1:text", "master:sample:card-1|2:text"])
+
+    def test_master_ignores_relational_primary_key_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            yaml_dir = root / "yaml"
+            mod_dir = root / "mod"
+            yaml_dir.mkdir()
+            mod_dir.mkdir()
+            (yaml_dir / "sample.yaml").write_text(
+                "- id: a\n  name: 原文A\n  descriptions:\n    - text: 甲\n"
+                "- id: b\n  name: 原文B\n  descriptions:\n    - text: 乙\n",
+                encoding="utf-8",
+            )
+            (mod_dir / "sample.json").write_text(
+                json.dumps(
+                    {"rules": {"primaryKeys": ["id", "descriptions.text"]},
+                     "data": [{"id": "extra", "name": "多余"},
+                              {"id": "a", "name": "译文A"}, {"id": "b", "name": "译文B"}]},
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            items = extract_master_text(yaml_dir, mod_dir)
+
+        self.assertEqual([item["existing_cn"] for item in items], ["译文A", "译文B"])
+
+    def test_build_master_matches_idless_and_duplicate_records_by_key(self):
         build = _load_stage("04_build")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -383,9 +490,9 @@ class MasterRegressionTests(unittest.TestCase):
                 count = build._apply_master(
                     "sample.json",
                     [
-                        {"uid": "master:sample:0:repeated:name", "record_id": "repeated", "field": "name", "cn": "译文一"},
-                        {"uid": "master:sample:1:repeated:name", "record_id": "repeated", "field": "name", "cn": "译文二"},
-                        {"uid": "master:sample:2:_idx2:name", "record_id": "", "field": "name", "cn": "无 ID 译文"},
+                        {"uid": "master:sample:repeated#0:name", "record_id": "repeated", "key": ["repeated"], "key_occurrence": 0, "field": "name", "cn": "译文一"},
+                        {"uid": "master:sample:repeated#1:name", "record_id": "repeated", "key": ["repeated"], "key_occurrence": 1, "field": "name", "cn": "译文二"},
+                        {"uid": "master:sample:_idx2:name", "record_id": "", "key": [None], "key_occurrence": 0, "field": "name", "cn": "无 ID 译文"},
                     ],
                 )
             finally:
@@ -394,6 +501,41 @@ class MasterRegressionTests(unittest.TestCase):
 
         self.assertEqual(count, 3)
         self.assertEqual([record["name"] for record in data["data"]], ["译文一", "译文二", "无 ID 译文"])
+
+    def test_build_master_places_translation_by_key_not_position(self):
+        build = _load_stage("04_build")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            master_dir = root / "local-files" / "masterTrans"
+            master_dir.mkdir(parents=True)
+            target = master_dir / "sample.json"
+            # The overlay keeps a row the source no longer has; the translation
+            # for `c` must land on `c`, not on the row sitting at its index.
+            target.write_text(
+                json.dumps(
+                    {"rules": {"primaryKeys": ["id"]},
+                     "data": [{"id": "a", "name": "译文A"}, {"id": "b", "name": "译文B"},
+                              {"id": "c", "name": ""}]},
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            original_out = build.OUT
+            build.OUT = root
+            try:
+                count = build._apply_master(
+                    "sample.json",
+                    [
+                        {"uid": "master:sample:a:name", "record_id": "a", "key": ["a"], "key_occurrence": 0, "field": "name", "cn": "译文A"},
+                        {"uid": "master:sample:c:name", "record_id": "c", "key": ["c"], "key_occurrence": 0, "field": "name", "cn": "译文C"},
+                    ],
+                )
+            finally:
+                build.OUT = original_out
+            data = json.loads(target.read_text(encoding="utf-8"))
+
+        self.assertEqual(count, 2)
+        self.assertEqual([record["name"] for record in data["data"]], ["译文A", "译文B", "译文C"])
 
     def test_build_master_creates_missing_id_based_table(self):
         build = _load_stage("04_build")
@@ -432,7 +574,7 @@ class MasterRegressionTests(unittest.TestCase):
             )
             snapshot = root / "snapshot.json"
             snapshot.write_text(
-                json.dumps({"master:sample:0:1:name": "旧原文"}, ensure_ascii=False),
+                json.dumps({"master:sample:1:name": "旧原文"}, ensure_ascii=False),
                 encoding="utf-8",
             )
 
@@ -489,7 +631,7 @@ class MasterRegressionTests(unittest.TestCase):
         self.assertEqual(items[0]["existing_cn"], "nightly译文")
         self.assertEqual(items[0]["status"], "existing")
 
-    def test_master_uses_record_index_for_idless_nightly_entries(self):
+    def test_master_uses_nightly_for_idless_entries(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             yaml_dir = root / "yaml"
@@ -761,6 +903,86 @@ class LocalizationBuildRegressionTests(unittest.TestCase):
         self.assertEqual(data["nested"]["c"], "新2")
 
 
+class LyricBuildRegressionTests(unittest.TestCase):
+    def _apply(self, root, file_name, payload, items):
+        build = _load_stage("04_build")
+        target = root / "local-files" / "genericTrans" / file_name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        original_out = build.OUT
+        build.OUT = root
+        try:
+            build._apply_generic(items)
+        finally:
+            build.OUT = original_out
+        return json.loads(target.read_text(encoding="utf-8"))
+
+    def test_bilingual_lyrics_file_wraps_translation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            key = "青空に\u3000スマホが届いた\r\n"
+            data = self._apply(
+                root,
+                "srt_live_all-001.json",
+                {"青空に\u3000スマホが届いた\r\n": "青空に\u3000スマホが届いた\n蓝天下 手机送来消息\r\n"},
+                [
+                    {
+                        "uid": f"generic:local-files/genericTrans/srt_live_all-001.json:{key}",
+                        "category": "generic",
+                        "file": "local-files/genericTrans/srt_live_all-001.json",
+                        "field": key,
+                        "cn": "蓝天下 手机送来消息",
+                    }
+                ],
+            )
+
+        self.assertEqual(
+            data[key], "青空に\u3000スマホが届いた\n蓝天下 手机送来消息\r\n"
+        )
+
+    def test_translation_only_file_keeps_value_without_source_line(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            key = "ラウンド1\n"
+            data = self._apply(
+                root,
+                "index.json",
+                {"ラウンド1\n": "第1轮\n"},
+                [
+                    {
+                        "uid": f"generic:local-files/genericTrans/index.json:{key}",
+                        "category": "generic",
+                        "file": "local-files/genericTrans/index.json",
+                        "field": key,
+                        "cn": "第2轮",
+                    }
+                ],
+            )
+
+        self.assertEqual(data[key], "第2轮\n")
+
+    def test_existing_value_is_written_verbatim(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            key = "青空に\u3000スマホが届いた\r\n"
+            data = self._apply(
+                root,
+                "srt_live_all-001.json",
+                {key: "青空に\u3000スマホが届いた\n蓝天下 手机送来消息\r\n"},
+                [
+                    {
+                        "uid": f"generic:local-files/genericTrans/srt_live_all-001.json:{key}",
+                        "category": "generic",
+                        "file": "local-files/genericTrans/srt_live_all-001.json",
+                        "field": key,
+                        "existing_cn": "蓝天之下\r\n",
+                    }
+                ],
+            )
+
+        self.assertEqual(data[key], "蓝天之下\r\n")
+
+
 class TranslateBatchingTests(unittest.TestCase):
     def test_group_key_is_file_scoped(self):
         translate = _load_stage("03_translate")
@@ -843,6 +1065,25 @@ class TranslateBatchingTests(unittest.TestCase):
         )
 
 
+class ExtractLabelTests(unittest.TestCase):
+    def test_items_are_tagged_with_the_label_the_translate_stage_uses(self):
+        extract = _load_stage("02_extract")
+        translate = _load_stage("03_translate")
+        items = [
+            {"uid": "adv_x:1:text"},
+            {"uid": "generic:f:Lyrics: A\nComposer: B\n"},
+        ]
+
+        extract._tag_labels(items)
+
+        labels = [item["hash"] for item in items]
+        self.assertEqual(len(set(labels)), 2)
+        for item in items:
+            self.assertEqual(len(item["hash"]), 16)
+            int(item["hash"], 16)
+            self.assertEqual(translate._label(item), item["hash"])
+
+
 class TranslatePromptTests(unittest.TestCase):
     def _translate(self):
         translate = _load_stage("03_translate")
@@ -895,21 +1136,61 @@ class TranslatePromptTests(unittest.TestCase):
 
     def test_prompt_lists_existing_translations_as_reference_only(self):
         translate = self._translate()
+        item = {"uid": "g:1:a", "category": "generic", "file": "g.json", "field": "a", "jp": "こんにちは", "existing_cn": "你好"}
+
+        prompt = translate.build_contextual_prompt([item])
+
+        self.assertIn(f"[{translate._label(item)}] 你好", prompt)
+
+    def test_lyric_row_shows_label_without_repeating_the_key(self):
+        translate = self._translate()
+        item = {
+            "uid": "generic:f:あのね。\r\n", "hash": "abcd1234abcd1234", "category": "generic",
+            "file": "f.json", "field": "あのね。\r\n", "jp": "あのね。\r\n",
+        }
+
+        prompt = translate.build_contextual_prompt([item])
+
+        self.assertIn("[abcd1234abcd1234] あのね。", prompt)
+        self.assertNotIn("（あのね。", prompt)
+
+    def test_prompt_asks_for_json_structured_output(self):
+        translate = self._translate()
 
         prompt = translate.build_contextual_prompt([
-            {"uid": "g:1:a", "category": "generic", "file": "g.json", "field": "a", "jp": "こんにちは", "existing_cn": "你好"},
+            {"uid": "master:m:1:name", "category": "master", "file": "m.json", "field": "name", "jp": "原文"},
         ])
 
-        self.assertIn("[g:1:a] 你好", prompt)
+        self.assertIn('{"translations":[{"id":', prompt)
+        self.assertIn("只输出一个 JSON 对象", prompt)
+        self.assertIn("不要 markdown 代码块", prompt)
+        self.assertNotIn("--- 不属于译文", prompt)
 
+    def test_prompt_carries_game_background_and_field_hints(self):
+        translate = self._translate()
+
+        prompt = translate.build_contextual_prompt([
+            {"uid": "master:m:1:name", "category": "master", "file": "m.json", "field": "name", "jp": "原文"},
+            {"uid": "master:m:1:regexp", "category": "master", "file": "m.json", "field": "regexp", "jp": "麻央$"},
+        ])
+
+        self.assertIn("学园偶像大师", prompt)
+        self.assertIn("文本类型：游戏数据表", prompt)
+        self.assertIn("主要角色中文名：花海咲季", prompt)
+        self.assertIn("- name：名称", prompt)
+        self.assertIn("- regexp：正则匹配片段", prompt)
+        self.assertIn("{user}、{0}、{threshold} 等花括号占位符", prompt)
 
 class TranslateParseTests(unittest.TestCase):
     def setUp(self):
         self.translate = _load_stage("03_translate")
-        self.group = [{"uid": "a:1:text"}, {"uid": "b:2:text"}]
+        self.group = [
+            {"uid": "a:1:text", "hash": "1a2b"},
+            {"uid": "b:2:text", "hash": "3c4d"},
+        ]
 
-    def test_explicit_uids_are_parsed(self):
-        content = "[a:1:text] 你好\n---\n[b:2:text] 世界"
+    def test_labeled_entries_are_parsed(self):
+        content = _json_translations(("1a2b", "你好"), ("3c4d", "世界"))
 
         self.assertEqual(
             self.translate._parse_translations(content, self.group),
@@ -917,65 +1198,147 @@ class TranslateParseTests(unittest.TestCase):
         )
 
     def test_single_code_fence_is_tolerated(self):
-        content = "```text\n[a:1:text] 你好\n---\n[b:2:text] 世界\n```"
+        content = "```json\n" + _json_translations(("1a2b", "你好")) + "\n```"
 
         self.assertEqual(
             self.translate._parse_translations(content, self.group),
-            {"a:1:text": "你好", "b:2:text": "世界"},
+            {"a:1:text": "你好"},
         )
 
-    def test_uid_crlf_is_matched_against_lf_response(self):
-        uid = "generic:file:第一行\r\n第二行\r\n"
-        content = "[generic:file:第一行\n第二行\n] 第一行\n第二行"
-
-        self.assertEqual(
-            self.translate._parse_translations(content, [{"uid": uid}]),
-            {uid: "第一行\n第二行"},
+    def test_bare_array_is_tolerated(self):
+        content = json.dumps(
+            [{"id": "3c4d", "translation": "世界"}], ensure_ascii=False
         )
-
-    def test_positional_response_is_rejected(self):
-        self.assertEqual(
-            self.translate._parse_translations("你好\n---\n世界", self.group), {}
-        )
-
-    def test_unknown_uid_is_rejected_not_remapped(self):
-        content = "[c:9:text] 你好\n---\n[b:2:text] 世界"
-
-        parsed = self.translate._parse_translations(content, self.group)
-
-        self.assertEqual(parsed, {"b:2:text": "世界"})
-        self.assertNotIn("c:9:text", parsed)
-
-    def test_duplicate_uid_is_rejected(self):
-        content = "[a:1:text] 你好\n---\n[a:1:text] 再会\n---\n[b:2:text] 世界"
 
         self.assertEqual(
             self.translate._parse_translations(content, self.group),
             {"b:2:text": "世界"},
         )
 
-    def test_missing_uid_stays_missing(self):
-        self.assertEqual(
-            self.translate._parse_translations("[a:1:text] 你好", self.group),
-            {"a:1:text": "你好"},
-        )
-
-    def test_bracketed_uids_are_parsed(self):
-        group = [{"uid": "adv_x:3:text[0]"}, {"uid": "adv_x:3:text[1]"}]
-        content = "[adv_x:3:text[0]] 是\n---\n[adv_x:3:text[1]] 否"
-
-        self.assertEqual(
-            self.translate._parse_translations(content, group),
-            {"adv_x:3:text[0]": "是", "adv_x:3:text[1]": "否"},
-        )
-
-    def test_unknown_bracket_does_not_bleed_into_previous_translation(self):
-        content = "[a:1:text] 你好\n[c:9] 无关\n---\n[b:2:text] 世界"
+    def test_altered_label_is_rejected(self):
+        content = _json_translations(("[1a2b]", "你好"), (" 1a2b ", "你好"), ("3c4d", "世界"))
 
         self.assertEqual(
             self.translate._parse_translations(content, self.group),
-            {"a:1:text": "你好", "b:2:text": "世界"},
+            {"b:2:text": "世界"},
         )
+
+    def test_plain_text_response_is_rejected(self):
+        self.assertEqual(
+            self.translate._parse_translations("[1a2b] 你好\n---\n[3c4d] 世界", self.group),
+            {},
+        )
+        self.assertEqual(
+            self.translate._parse_translations(
+                json.dumps({"translations": [{"uid": "1a2b", "translation": "你好"}]}, ensure_ascii=False),
+                self.group,
+            ),
+            {},
+        )
+        self.assertEqual(
+            self.translate._parse_translations("完全无法识别的响应", self.group), {}
+        )
+
+    def test_empty_translation_list_is_rejected(self):
+        self.assertEqual(
+            self.translate._parse_translations('{"translations": []}', self.group), {}
+        )
+
+    def test_unknown_label_is_rejected_not_remapped(self):
+        content = _json_translations(("c9c9", "你好"), ("3c4d", "世界"))
+
+        parsed = self.translate._parse_translations(content, self.group)
+
+        self.assertEqual(parsed, {"b:2:text": "世界"})
+        self.assertNotIn("a:1:text", parsed)
+
+    def test_duplicate_label_is_rejected(self):
+        content = _json_translations(
+            ("1a2b", "你好"), ("1a2b", "再会"), ("3c4d", "世界")
+        )
+
+        self.assertEqual(
+            self.translate._parse_translations(content, self.group),
+            {"b:2:text": "世界"},
+        )
+
+    def test_group_with_repeated_label_is_rejected(self):
+        group = [{"uid": "a:1:text", "hash": "1a2b"}, {"uid": "b:2:text", "hash": "1a2b"}]
+
+        self.assertEqual(
+            self.translate._parse_translations(_json_translations(("1a2b", "你好")), group),
+            {},
+        )
+
+    def test_missing_label_stays_missing(self):
+        self.assertEqual(
+            self.translate._parse_translations(_json_translations(("1a2b", "你好")), self.group),
+            {"a:1:text": "你好"},
+        )
+
+    def test_non_string_entries_are_rejected(self):
+        content = json.dumps(
+            {"translations": [{"id": "1a2b", "translation": 7}, {"id": 5, "translation": "你好"}]},
+            ensure_ascii=False,
+        )
+
+        self.assertEqual(self.translate._parse_translations(content, self.group), {})
+
+    def test_label_falls_back_to_uid_digest(self):
+        group = [{"uid": "a:1:text"}, {"uid": "b:2:text"}]
+        label = self.translate._label(group[0])
+
+        self.assertEqual(len(label), 16)
+        self.assertEqual(
+            self.translate._parse_translations(_json_translations((label, "你好")), group),
+            {"a:1:text": "你好"},
+        )
+
+
+class TranslateNewlineFormTests(unittest.TestCase):
+    def test_json_newline_escape_is_rewritten_to_source_marker(self):
+        translate = _load_stage("03_translate")
+        item = {"uid": "adv_x:1:text", "category": "resource", "jp": r"登場人物は\n麻央さん"}
+
+        # The model answers the source's literal \n with the JSON escape, which
+        # decodes to a real newline; the game needs the literal marker back.
+        self.assertEqual(
+            translate._normalize_newline_form(item, "登场人物是\n麻央"),
+            r"登场人物是\n麻央",
+        )
+        # Already literal, count mismatch and real-newline sources stay untouched.
+        self.assertEqual(
+            translate._normalize_newline_form(item, r"登场人物是\n麻央"),
+            r"登场人物是\n麻央",
+        )
+        self.assertEqual(
+            translate._normalize_newline_form(item, "登场人物是\n麻央\n以及"),
+            "登场人物是\n麻央\n以及",
+        )
+        real = {"uid": "master:m:1:text", "category": "master", "jp": "一行目\n二行目"}
+        self.assertEqual(
+            translate._normalize_newline_form(real, "第一行\n第二行"), "第一行\n第二行"
+        )
+        no_break = {"uid": "m:1:name", "category": "master", "jp": "最終試験1位"}
+        self.assertEqual(
+            translate._normalize_newline_form(no_break, "最终考试第1名"), "最终考试第1名"
+        )
+
+    def test_group_retry_accepts_json_newline_escape(self):
+        translate = _load_stage("03_translate")
+        translate._config = lambda: {"char_map": {}}
+        backend = _ScriptedBackend([_uid_translations(("a:1:text", "哇～\n好吃～"))])
+        translate._BACKEND = backend
+        self.addCleanup(lambda: setattr(translate, "_BACKEND", None))
+        group = [{
+            "uid": "a:1:text", "category": "resource", "file": "adv_x.txt",
+            "line": 1, "field": "text", "jp": r"おお～！\n美味しそ～！", "status": "new",
+        }]
+
+        result = translate.translate_group(group)
+
+        self.assertEqual(result, {"a:1:text": r"哇～\n好吃～"})
+        self.assertEqual(len(backend.prompts), 1)
 
 
 class TranslateValidationTests(unittest.TestCase):
@@ -1002,6 +1365,48 @@ class TranslateValidationTests(unittest.TestCase):
         }
 
         self.assertIsNone(self.translate._validate_translation(item, "歌词"))
+        self.assertIsNone(self.translate._validate_translation(item, "歌词\r\n"))
+
+    def test_lyric_response_trailing_break_is_stripped(self):
+        item = {
+            "uid": "generic:file:青空に\r\n",
+            "category": "generic",
+            "jp": "青空に\r\n",
+            "field": "青空に\r\n",
+        }
+
+        self.assertEqual(
+            self.translate._strip_lyric_source_line(item, "蓝天下\n"), "蓝天下"
+        )
+
+    def test_lyric_response_echoing_source_line_is_reduced(self):
+        item = {
+            "uid": "generic:file:青空に　スマホが届いた\r\n",
+            "category": "generic",
+            "jp": "青空に　スマホが届いた\r\n",
+            "field": "青空に　スマホが届いた\r\n",
+        }
+
+        self.assertEqual(
+            self.translate._strip_lyric_source_line(
+                item, "青空に　スマホが届いた\n蓝天下 手机送来消息\r\n"
+            ),
+            "蓝天下 手机送来消息",
+        )
+        # The source's inner break may come back as a space.
+        self.assertEqual(
+            self.translate._strip_lyric_source_line(
+                item, "青空に スマホが届いた\n蓝天下 手机送来消息"
+            ),
+            "蓝天下 手机送来消息",
+        )
+
+    def test_non_lyric_response_keeps_inner_breaks(self):
+        item = {"uid": "generic:file:回数\n残り", "category": "generic", "jp": "回数\n残り"}
+
+        self.assertEqual(
+            self.translate._strip_lyric_source_line(item, "次数\n剩余"), "次数\n剩余"
+        )
 
     def test_actual_newline_is_rejected(self):
         item = self._resource(r"前列にいるのは、\n麻央さん")
@@ -1059,8 +1464,16 @@ class _ScriptedBackend:
         return response
 
 
+def _json_translations(*pairs: tuple[str, str]) -> str:
+    """Structured response body as the pipeline expects it."""
+    return json.dumps(
+        {"translations": [{"id": label, "translation": cn} for label, cn in pairs]},
+        ensure_ascii=False,
+    )
+
+
 class _UidMapBackend:
-    """Offline stub answering every [uid] it knows that appears in the prompt."""
+    """Offline stub answering every uid it knows that appears in the prompt."""
 
     def __init__(self, translations):
         self.translations = translations
@@ -1068,14 +1481,14 @@ class _UidMapBackend:
 
     def translate(self, prompt):
         self.prompts.append(prompt)
-        parts = [
-            f"[{uid}] {cn}"
+        rows = [
+            {"id": uid_label(uid), "translation": cn}
             for uid, cn in self.translations.items()
-            if f"[{uid}]" in prompt
+            if f"[{uid_label(uid)}]" in prompt
         ]
-        if not parts:
-            raise AssertionError("stub received no known UID")
-        return "\n---\n".join(parts)
+        if not rows:
+            raise AssertionError("stub received no known label")
+        return json.dumps({"translations": rows}, ensure_ascii=False)
 
 
 class TranslateGroupRetryTests(unittest.TestCase):
@@ -1096,8 +1509,8 @@ class TranslateGroupRetryTests(unittest.TestCase):
 
     def test_invalid_item_is_repaired_in_targeted_request(self):
         translate, backend = self._translate_with([
-            "[a:1:text] 早上好\n---\n[b:2:text] ",
-            "[b:2:text] 晚上好",
+            _uid_translations(("a:1:text", "早上好")),
+            _uid_translations(("b:2:text", "晚上好")),
         ])
         group = [self._item("a:1:text", "おはよう"), self._item("b:2:text", "こんばんは")]
 
@@ -1105,14 +1518,14 @@ class TranslateGroupRetryTests(unittest.TestCase):
 
         self.assertEqual(result, {"a:1:text": "早上好", "b:2:text": "晚上好"})
         self.assertEqual(len(backend.prompts), 2)
-        self.assertIn("[b:2:text] 失败原因", backend.prompts[1])
-        self.assertNotIn("[a:1:text]", backend.prompts[1])
+        self.assertIn(f"[{uid_label('b:2:text')}] 失败原因", backend.prompts[1])
+        self.assertNotIn(f"[{uid_label('a:1:text')}]", backend.prompts[1])
 
     def test_split_single_failure_keeps_verified_translations(self):
         translate, backend = self._translate_with([
             "完全无法识别的响应",
-            "[a:1:text] 早上好",
-            "[b:2:text] ",
+            _uid_translations(("a:1:text", "早上好")),
+            _uid_translations(("b:2:text", " ")),
         ])
         group = [self._item("a:1:text", "おはよう"), self._item("b:2:text", "こんばんは")]
 
@@ -1129,7 +1542,7 @@ class TranslateGroupRetryTests(unittest.TestCase):
             "413 request too large", response=SimpleNamespace(status_code=413)
         )
         translate, backend = self._translate_with([
-            oversize, "[a:1:text] 早上好", "[b:2:text] 晚上好",
+            oversize, _uid_translations(("a:1:text", "早上好")), _uid_translations(("b:2:text", "晚上好")),
         ])
         group = [self._item("a:1:text", "おはよう"), self._item("b:2:text", "こんばんは")]
 
@@ -1137,8 +1550,8 @@ class TranslateGroupRetryTests(unittest.TestCase):
 
         self.assertEqual(result, {"a:1:text": "早上好", "b:2:text": "晚上好"})
         self.assertEqual(len(backend.prompts), 3)
-        self.assertNotIn("[b:2:text]", backend.prompts[1])
-        self.assertNotIn("[a:1:text]", backend.prompts[2])
+        self.assertNotIn(f"[{uid_label('b:2:text')}]", backend.prompts[1])
+        self.assertNotIn(f"[{uid_label('a:1:text')}]", backend.prompts[2])
 
 
 class TranslateIncrementalTests(unittest.TestCase):
@@ -1242,14 +1655,14 @@ class TranslateIncrementalTests(unittest.TestCase):
         translate, cache_dir = self._prepare(
             items, checkpoint={"adv_x:1:text": "早上好"}
         )
-        backend = _ScriptedBackend(["[adv_x:2:text] 晚上好"])
+        backend = _ScriptedBackend([_uid_translations(("adv_x:2:text", "晚上好"))])
         translate._BACKEND = backend
 
         translate.main()
 
         self.assertEqual(len(backend.prompts), 1)
-        self.assertIn("[adv_x:2:text]", backend.prompts[0])
-        self.assertNotIn("[adv_x:1:text]", backend.prompts[0])
+        self.assertIn(f"[{uid_label('adv_x:2:text')}]", backend.prompts[0])
+        self.assertNotIn(f"[{uid_label('adv_x:1:text')}]", backend.prompts[0])
         written = json.loads((cache_dir / "translated.json").read_text(encoding="utf-8"))
         self.assertEqual(
             [(item["uid"], item["cn"]) for item in written],
@@ -1264,9 +1677,9 @@ class TranslateIncrementalTests(unittest.TestCase):
         ]
         translate, cache_dir = self._prepare(items)
         translate._BACKEND = _ScriptedBackend([
-            "[adv_x:1:text] 早上好",
+            _uid_translations(("adv_x:1:text", "早上好")),
             "",
-            "[adv_x:2:text] ",
+            _uid_translations(("adv_x:2:text", " ")),
         ])
 
         with self.assertRaises(SystemExit) as cm:
@@ -1279,7 +1692,7 @@ class TranslateIncrementalTests(unittest.TestCase):
         self.assertEqual(checkpoint, {"adv_x:1:text": "早上好"})
 
         # The next run only retries the failed UID.
-        translate._BACKEND = _ScriptedBackend(["[adv_x:2:text] 晚上好"])
+        translate._BACKEND = _ScriptedBackend([_uid_translations(("adv_x:2:text", "晚上好"))])
         translate.main()
 
         written = json.loads((cache_dir / "translated.json").read_text(encoding="utf-8"))
@@ -1512,6 +1925,28 @@ class LLMBackendParamsTests(unittest.TestCase):
 
         self.assertEqual(captured["payload"]["reasoning_effort"], "low")
         self.assertNotIn("temperature", captured["payload"])
+
+    def test_openai_requests_json_schema_structured_output(self):
+        captured, fake_post = self._capture_post(
+            {"choices": [{"message": {"content": "{}"}}]}
+        )
+        backend = OpenAIBackend({
+            "base_url": "https://example.invalid/v1", "api_key": "secret",
+            "model": "m", "max_tokens": 123, "timeout": 5,
+        })
+
+        with patch("lib.llm_backend.requests.post", fake_post):
+            backend.translate("hi")
+
+        response_format = captured["payload"]["response_format"]
+        self.assertEqual(response_format["type"], "json_schema")
+        self.assertTrue(response_format["json_schema"]["strict"])
+        schema = response_format["json_schema"]["schema"]
+        self.assertEqual(schema["required"], ["translations"])
+        self.assertFalse(schema["additionalProperties"])
+        item = schema["properties"]["translations"]["items"]
+        self.assertEqual(item["required"], ["id", "translation"])
+        self.assertFalse(item["additionalProperties"])
 
 
 

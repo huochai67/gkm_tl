@@ -6,7 +6,7 @@ from lib.parser_master import extract_master_text
 from lib.parser_generic import extract_generic_text
 from lib.parser_localization import extract_localization_text
 from lib.config import load_config, resolve_paths
-from lib.text_utils import looks_like_japanese_source
+from lib.text_utils import looks_like_japanese_source, uid_label
 
 CACHE = Path("cache")
 _RE_RESOURCE_CLOSE = re.compile(r"</r(?:\\)?>")
@@ -88,17 +88,22 @@ def _resource_sources_equal(old_jp: str, current_jp: str) -> bool:
     return _normalize_resource_source(old_jp) == _normalize_resource_source(current_jp)
 
 
+def _is_plain_resource_field(field: str) -> bool:
+    """Fields the existing mod stores without the <r\=JP>CN</r> wrapper."""
+    return field == "name" or field.startswith("text[")
+
+
 def _get_existing_resource_translation(
     field: str, mod_value: str, current_jp: str
 ) -> tuple[str, str]:
-    """Read either wrapped text or the mod's plain-Chinese choice format."""
+    """Read either wrapped text or the mod's plain-Chinese value."""
     if field.startswith("text[") and mod_value.startswith(r"<r\="):
         # Some choicegroup translations close the nested [choice] before the
         # JP/CN separator, leaving a stray ] inside the translation wrapper.
         mod_value = mod_value.replace("]>", ">", 1)
     old_jp, existing_cn = _split_resource_translation(mod_value)
     if (
-        field.startswith("text[")
+        _is_plain_resource_field(field)
         and old_jp
         and not existing_cn
         and (
@@ -106,9 +111,10 @@ def _get_existing_resource_translation(
             or not looks_like_japanese_source(old_jp)
         )
     ):
-        # choicegroup translations in the existing mod omit the <r\=JP> wrapper.
-        # They can retain Japanese words inside an otherwise Chinese translation,
-        # or be identical to the source when Japanese and Chinese use the same text.
+        # choicegroup translations and character names in the existing mod omit
+        # the <r\=JP> wrapper: the plain value is already the translation. They
+        # can retain Japanese words inside an otherwise Chinese translation, or
+        # be identical to the source when Japanese and Chinese use the same text.
         return current_jp, old_jp
     return old_jp, existing_cn
 
@@ -117,6 +123,16 @@ def _add_fallback_items(primary_items: list[dict], fallback_items: list[dict]) -
     """Keep primary package entries and use nightly entries only when absent."""
     primary_uids = {item["uid"] for item in primary_items}
     return primary_items + [item for item in fallback_items if item["uid"] not in primary_uids]
+
+
+def _tag_labels(items: list[dict]) -> None:
+    """Give every item the short request label the translate stage sends to the LLM.
+
+    Long generic keys cost output tokens and invite copying mistakes, so requests
+    carry ``hash`` instead of the uid; the uid stays the entry identity.
+    """
+    for item in items:
+        item["hash"] = uid_label(item["uid"])
 
 
 def main():
@@ -226,6 +242,7 @@ def main():
         )
     all_items += localization_items
 
+    _tag_labels(all_items)
     (cache_dir / "extract.json").write_text(json.dumps(all_items, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"Extracted {len(all_items)} items ({sum(1 for i in all_items if i['status']=='new')} new)", flush=True)
 

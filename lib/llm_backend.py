@@ -1,6 +1,40 @@
 import requests
 from lib.config import validate_llm_config
 
+TRANSLATION_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "game_text_translations",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "translations": {
+                    "type": "array",
+                    "description": "One entry per requested input line, in input order.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {
+                                "type": "string",
+                                "description": "The label inside [] of the input line, copied exactly.",
+                            },
+                            "translation": {
+                                "type": "string",
+                                "description": "Simplified Chinese translation of that input line's text.",
+                            },
+                        },
+                        "required": ["id", "translation"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["translations"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 
 class OpenAIBackend:
     def __init__(self, llm_cfg: dict):
@@ -12,6 +46,7 @@ class OpenAIBackend:
         payload = {
             "model": self.cfg["model"],
             "messages": [{"role": "user", "content": prompt}],
+            "response_format": TRANSLATION_RESPONSE_FORMAT,
         }
         if self.cfg.get("max_tokens"):
             payload["max_tokens"] = self.cfg["max_tokens"]

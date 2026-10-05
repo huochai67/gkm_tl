@@ -12,6 +12,9 @@ llm:
   # OpenAI-compatible reasoning effort: none, minimal, low, medium, or high.
   # Omit it to use the model/provider default.
   reasoning_effort: null
+  # Every request always carries response_format json_schema
+  # ({"translations":[{"id","translation"}]}); the provider must support OpenAI
+  # structured outputs.
   # Set false to retranslate entries whose source Japanese changed.
   skip_changed: true
 

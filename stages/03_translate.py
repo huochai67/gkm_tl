@@ -5,7 +5,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from lib.config import load_config, resolve_paths
 from lib.llm_backend import create_backend
-from lib.text_utils import looks_like_japanese_source
+from lib.text_utils import (
+    LINE_BREAKS,
+    looks_like_japanese_source,
+    repeated_source_end,
+    strip_line_breaks,
+    uid_label,
+)
 
 CACHE = Path("cache")
 CHECKPOINT = CACHE / "translate_checkpoint.json"
@@ -108,10 +114,66 @@ def _batch_refs(group: list[dict]) -> list[tuple[str, str]]:
     if refs is not None:
         return refs
     return [
-        (item["uid"], item["existing_cn"])
+        (_label(item), item["existing_cn"])
         for item in group
         if item.get("existing_cn")
     ][:8]
+
+
+_CATEGORY_CN = {
+    "resource": "剧情脚本（角色台词、旁白、标题、选项）",
+    "master": "游戏数据表（技能/道具/任务/歌曲等名称与说明）",
+    "generic": "通用界面文本",
+    "localization": "界面词条",
+}
+
+_FIELD_HINTS = {
+    "name": "名称（技能卡、道具、角色、歌曲、任务名等），尽量简短",
+    "title": "标题",
+    "displayTitle": "曲名，保留 [Instrumental] 等后缀",
+    "text": "正文或台词",
+    "message": "角色推送消息/台词，口语化",
+    "description": "说明文本，常含 {threshold} 之类占位符，须原样保留",
+    "label": "分类/功能的一行说明",
+    "content": "内容短词（年级、星座、人名等）",
+    "targetDescription": "目标描述（如「最终試験1位」→「最终考试第1名」）",
+    "targetIdentityName": "徽章目标标识名（如「シーズン1」→「赛季1」）",
+    "targetContentName": "徽章目标内容名（角色名、歌曲名等）",
+    "homeDescription": "主页任务说明，祈使句（如「去挑战偶像培育吧」）",
+    "acquisitionRouteDescription": "获取途径说明，顿号分隔的列表",
+    "produceConditionDescription": "培育条件说明（如「培育中完成1次以上的训练」）",
+    "produceCardCustomizeDescription": "强化效果短标签，保留 + / - 与字面 \\n",
+    "composer": "作曲者姓名，保持原文写法",
+    "arranger": "编曲者姓名，保持原文写法",
+    "lyrics": "作词者姓名，保持原文写法",
+    "regexp": "正则匹配片段：只翻译其中的日文，保留 $ ^ . * ( ) 等正则符号",
+}
+
+
+def _field_hint(field: str) -> str:
+    if field.startswith("text["):
+        return "选项文本（choicegroup 选项，按顺序编号）"
+    return _FIELD_HINTS.get(field, "")
+
+
+def _character_names() -> list[str]:
+    """Chinese character names from config, used as a terminology glossary."""
+    names = []
+    for name in _config()["char_map"].values():
+        if name and "{" not in name and name not in names:
+            names.append(name)
+    return names
+
+
+def _label(item: dict) -> str:
+    """Request-local label for an item: the extract hash, else its own uid digest.
+
+    UIDs of ``generic`` rows embed the whole source key (``Lyrics: ...\nComposer:
+    ...``), which costs output tokens and invites copying mistakes, so requests
+    identify rows by a short digest. The uid stays the entry identity in
+    extract.json, the checkpoint and translated.json.
+    """
+    return item.get("hash") or uid_label(item["uid"])
 
 
 def build_contextual_prompt(group: list[dict]) -> str:
@@ -131,7 +193,46 @@ def _build_prompt(group: list[dict], failures: dict[str, str] | None) -> str:
     )
     ctx = ctx_item["file_context"] if ctx_item else {}
 
-    lines = ["[上下文]"]
+    lines = ["[任务]"]
+    lines.append("将《学园偶像大师》(学マス) 的游戏文本翻译为简体中文，译文会直接显示在游戏界面与剧情中。")
+    lines.append("译文需简短自然、符合角色语气，避免书面语与直译腔，不添加原文没有的内容或标点。")
+    lines.append("")
+    lines.append("[输出格式]")
+    lines.append("只输出一个 JSON 对象，不要 markdown 代码块、不要解释、不要输出其他文字：")
+    lines.append('{"translations":[{"id":"输入行标识（16 位十六进制，原样回抄，不带括号）","translation":"简体中文译文"}]}')
+    lines.append(f"本次共 {len(group)} 条：每条 id 必须出现且只出现一次，顺序与输入一致，不要合并或拆分条目。")
+    lines.append("")
+    lines.append("[规则]")
+    lines.append("1. {user}、{0}、{threshold} 等花括号占位符原样保留，数量与位置不变。")
+    lines.append(r"2. 原文中的字面 \n（反斜杠加 n，代表游戏内换行）原样保留且数量不变；不要新增或删除实际换行。")
+    lines.append(r'   例：原文「A\nB」要返回 "translation": "A\\nB"（JSON 里反斜杠需要转义）。')
+    lines.append(r"3. 保留 <r\=...>...</r> 等游戏标签结构，包括 r 后面的反斜杠。")
+    lines.append("4. 保留数字、Lv、评价等级、♪、～、『』「」、【】等符号。")
+    lines.append("5. 歌曲名、组合名、活动名、人名用官方中文写法；没有官方译名时保留原文，不要意译。")
+    lines.append("6. 同一批次内称呼、语气、术语保持一致；同一角色始终使用同一译名。")
+    lines.append("7. id 是输入行开头的 16 位十六进制标识：逐字符原样回抄，不要加括号、不要翻译、不要增删字符。")
+    lines.append("8. 输入行 id 后的（角色）/（字段）括号标注只是上下文，不要写进译文。")
+    lines.append("9. 文本内的英文标签 Lyrics/Composer/Arranger（以及 Choreography 等同类）译为 歌词/作曲/编曲，标签后的人名保持原文写法；不要整行原样返回。")
+
+    lines.append("")
+    lines.append("[背景]")
+    lines.append(f"作品：学园偶像大师（学マス），日式偶像养成手游；文本类型：{_CATEGORY_CN.get(category, category)}。")
+    names = _character_names()
+    if names:
+        lines.append("主要角色中文名：" + "、".join(names) + "（剧情中的日文称呼/昵称按此对应）")
+    if ctx.get("character"):
+        lines.append(f"本批角色：{_char_cn(ctx['character'])}；场景：{_story_cn(ctx.get('story_type', ''))}")
+    hints = []
+    for field in sorted({item.get("field", "") for item in group if item.get("field")}):
+        hint = _field_hint(field)
+        if hint:
+            hints.append(f"- {field}：{hint}")
+    if hints:
+        lines.append("字段含义：")
+        lines.extend(hints)
+
+    lines.append("")
+    lines.append("[本批上下文]")
     lines.append(f"文件: {first.get('file', '')}")
     lines.append(f"类别: {category}")
     if ctx.get("character"):
@@ -141,51 +242,36 @@ def _build_prompt(group: list[dict], failures: dict[str, str] | None) -> str:
     fields = sorted({item.get("field", "") for item in group if item.get("field")})
     if category != "resource" and fields:
         lines.append(f"字段: {', '.join(fields)}")
-    lines.append("")
-
-    lines.append(f"将以下 {len(group)} 条游戏文本翻译成简体中文。")
-    lines.append("要求：")
-    lines.append("1. 只翻译输入中出现的 [uid]，每段必须以原始 [uid] 开头，段间用单独一行 --- 分隔。")
-    lines.append("2. 不要输出输入之外的 [uid]，不要输出 markdown 代码块、解释或额外内容。")
-    lines.append("3. 保持原文换行结构：原文中的字面 \\n（反斜杠加 n）必须原样保留且数量不变，"
-                 "原文的实际换行数量也必须一致，不要新增换行。")
-    lines.append("4. 保留 {user} 等花括号占位符及其出现次数。")
-    lines.append("5. 保留游戏标签结构（如 <r\\=...>...</r>），包括 r 后面的反斜杠。")
-    lines.append("6. 同一批对话保持角色语气、称呼和术语一致。")
-    lines.append("7. 输入行 [uid] 后面的（角色）或（字段）标注只是上下文信息，不要写进译文。")
 
     refs = _batch_refs(group)
     if refs:
         lines.append("")
-        lines.append("以下既有译文仅供参考术语与语气，仍需按要求翻译并输出本次输入中的全部 [uid]：")
-        for uid, cn in refs:
-            lines.append(f"[{uid}] {cn}")
+        lines.append("以下既有译文仅供参考术语与语气，仍需翻译并输出本次输入中的全部条目：")
+        for label, cn in refs:
+            lines.append(f"[{label}] {cn}")
 
     if failures:
         lines.append("")
         lines.append("上一次请求中以下条目缺失或格式无效，请只重新翻译这些条目：")
         for item in group:
             if item["uid"] in failures:
-                lines.append(f"[{item['uid']}] 失败原因: {failures[item['uid']]}")
+                lines.append(f"[{_label(item)}] 失败原因: {failures[item['uid']]}")
 
     lines.append("")
     lines.append(f"输入（{len(group)} 条，按顺序翻译）:")
     for item in group:
-        uid = item["uid"]
+        label = _label(item)
         jp = item["jp"]
         speaker = item.get("speaker", "")
+        field = item.get("field", "")
         if speaker:
-            lines.append(f"[{uid}] （{_char_cn(speaker)}） {jp}")
-        elif category != "resource" and item.get("field"):
-            lines.append(f"[{uid}] （{item['field']}） {jp}")
+            lines.append(f"[{label}] （{_char_cn(speaker)}） {jp}")
+        elif category != "resource" and field and field != jp:
+            lines.append(f"[{label}] （{field}） {jp}")
         else:
-            lines.append(f"[{uid}] {jp}")
+            lines.append(f"[{label}] {jp}")
     lines.append("")
-    lines.append("输出格式：每段以原始 [uid] 开头，后接对应译文，用 --- 单独一行分隔；--- 不属于译文。")
-    lines.append("只翻译本次输入中出现的 [uid]。不要省略、改写或翻译 [uid]。不要解释。")
-    lines.append("")
-    lines.append("输出:")
-
+    lines.append("直接输出 JSON 结果（不要任何解释或代码块标记）。")
     return "\n".join(lines)
 
 # ── translate ───────────────────────────────────────────────
@@ -208,65 +294,61 @@ def _get_backend():
     return _BACKEND
 
 
-_SEPARATOR_LINE_RE = re.compile(r"(?m)^[ \t]*-{3,}[ \t]*$")
-_TRAILING_SEPARATOR_RE = re.compile(r"[ \t]*-{3,}[ \t]*$")
-_LINE_START_BRACKET_RE = re.compile(r"(?m)^[ \t]*(\[)")
-_FENCE_RE = re.compile(r"```[^\n`]*\r?\n(.*?)\r?\n?```", re.S)
-def _canonical_uid(uid: str) -> str:
-    """Normalize line endings in transport UIDs without changing stored UIDs."""
-    return uid.replace("\r\n", "\n").replace("\r", "\n")
+_FENCE_RE = re.compile(r"```[^\n`]*\r?\n?(.*?)\r?\n?```", re.S)
 
+
+def _json_body(content: str) -> str:
+    """Return the JSON payload of a response, unwrapping one fenced block."""
+    text = content.strip()
+    fence = _FENCE_RE.fullmatch(text)
+    return fence.group(1).strip() if fence else text
 
 
 def _parse_translations(content: str, group: list[dict]) -> dict[str, str]:
-    """Map explicitly labeled [uid] segments to translations, never by position.
+    """Map the structured response to translations by explicit label, never by position.
 
-    Unknown UIDs, duplicated UIDs, empty translations and segments without a
-    recognized input UID are rejected instead of being aligned by response order.
+    The request asks for ``{"translations": [{"id", "translation"}, ...]}`` where
+    ``id`` is the label the input line carried, copied exactly. Unknown labels,
+    duplicated labels, entries with non-string fields and payloads that are not
+    JSON are rejected instead of being aligned by response order.
     """
-    uids = [item["uid"] for item in group]
-    if not content or not uids:
+    if not content or not group:
         return {}
-    uid_by_canonical: dict[str, str] = {}
-    for uid in uids:
-        canonical_uid = _canonical_uid(uid)
-        previous = uid_by_canonical.get(canonical_uid)
-        if previous is not None and previous != uid:
+    labels: dict[str, str] = {}
+    for item in group:
+        label = _label(item)
+        previous = labels.get(label)
+        if previous is not None and previous != item["uid"]:
             return {}
-        uid_by_canonical[canonical_uid] = uid
-    text = content.strip()
-    fence = _FENCE_RE.fullmatch(text)
-    if fence:
-        text = fence.group(1).strip()
-    text = _canonical_uid(text)
-    text = _SEPARATOR_LINE_RE.sub("", text).strip()
-    if not text:
-        return {}
+        labels[label] = item["uid"]
 
-    known_re = re.compile(
-        r"\[(" + "|".join(
-            re.escape(uid) for uid in sorted(uid_by_canonical, key=len, reverse=True)
-        ) + r")\]"
-    )
-    marks = [(m.start(), m.end(), m.group(1)) for m in known_re.finditer(text)]
-    if not marks:
+    try:
+        document = json.loads(_json_body(content))
+    except json.JSONDecodeError:
         return {}
-    brackets = [m.start(1) for m in _LINE_START_BRACKET_RE.finditer(text)]
-
-    bodies: dict[str, list[str]] = {}
-    for index, (_, end, uid) in enumerate(marks):
-        stop = marks[index + 1][0] if index + 1 < len(marks) else len(text)
-        for bracket in brackets:
-            if end <= bracket < stop:
-                stop = bracket
-                break
-        body = _TRAILING_SEPARATOR_RE.sub("", text[end:stop]).strip()
-        bodies.setdefault(uid, []).append(body)
+    rows = document.get("translations") if isinstance(document, dict) else document
+    if not isinstance(rows, list):
+        return {}
 
     parsed: dict[str, str] = {}
-    for canonical_uid, bodies_per_uid in bodies.items():
-        if len(bodies_per_uid) == 1 and bodies_per_uid[0]:
-            parsed[uid_by_canonical[canonical_uid]] = bodies_per_uid[0]
+    rejected: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        label = row.get("id")
+        translation = row.get("translation")
+        if not isinstance(label, str) or not isinstance(translation, str):
+            continue
+        uid = labels.get(label)
+        if uid is None or uid in rejected:
+            continue
+        if uid in parsed:
+            # A uid repeated in one response cannot be attributed to a single
+            # line, so the whole uid is dropped and retried.
+            parsed.pop(uid)
+            rejected.add(uid)
+            continue
+        parsed[uid] = translation
     return parsed
 
 
@@ -279,16 +361,59 @@ def _canonical_newlines(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
+def _strip_lyric_source_line(item: dict, cn: str) -> str:
+    r"""Reduce a response for a break-terminated generic key to its translation.
+
+    Lyrics keys embed the source line break (``'青空に\u3000スマホがふるえ着信\r\n'``),
+    so models either mirror that trailing break or echo the bilingual entry the
+    prompt shows as a reference (``'<source line>\n<translation>'``). Both are
+    reduced to the translation; stage 04 rebuilds the container from the value
+    shape the file itself uses.
+    """
+    source = item.get("jp", "")
+    if item.get("category") != "generic" or not source.endswith(LINE_BREAKS):
+        return cn
+    text = strip_line_breaks(cn)
+    end = repeated_source_end(text, source.rstrip("\r\n"))
+    return strip_line_breaks(text[end:]) if end is not None else text
+
+
+def _normalize_newline_form(item: dict, cn: str) -> str:
+    r"""Re-encode newlines the way the source text expresses them.
+
+    The game writes its own line break as the literal two characters ``\n``.
+    JSON transport collides with that: a model answering ``\n`` for it produces
+    the JSON escape, which decodes to a real newline. When the decoded text
+    differs from the source only by that representation, rewrite it back so the
+    built package receives the marker the source uses.
+    """
+    jp = item.get("jp", "")
+    if not cn or not jp:
+        return cn
+    literal_jp = jp.count(r"\n")
+    if not literal_jp or _canonical_newlines(jp).count("\n"):
+        return cn
+    if cn.count(r"\n") or _canonical_newlines(cn).count("\n") != literal_jp:
+        return cn
+    return _canonical_newlines(cn).replace("\n", r"\n")
+
+
 def _validate_translation(item: dict, cn: str) -> str | None:
     """Return a rejection reason for a malformed translation, else None."""
     if not cn.strip():
         return "空译文"
     jp = item.get("jp", "")
     if item.get("category") == "generic":
+        # A generic key may embed the game's own line break; the translation's
+        # matching break is structural too and carries no text of its own.
         if jp.endswith("\r\n"):
             jp = jp[:-2]
         elif jp.endswith(("\r", "\n")):
             jp = jp[:-1]
+        if cn.endswith("\r\n"):
+            cn = cn[:-2]
+        elif cn.endswith(("\r", "\n")):
+            cn = cn[:-1]
     if _canonical_newlines(cn).count("\n") != _canonical_newlines(jp).count("\n"):
         return "换行数量与原文不一致（原文中的字面 \\n 必须原样保留）"
     if jp.count(r"\n") != cn.count(r"\n"):
@@ -354,6 +479,7 @@ def _request_into(
         if not cn:
             failures[uid] = "响应缺少该 UID 的有效译文"
             continue
+        cn = _normalize_newline_form(item, _strip_lyric_source_line(item, cn))
         reason = _validate_translation(item, cn)
         if reason:
             failures[uid] = reason
