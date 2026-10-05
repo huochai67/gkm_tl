@@ -700,17 +700,28 @@ class DownloadRegressionTests(unittest.TestCase):
             self.assertEqual((destination / "new.txt").read_text(encoding="utf-8"), "new")
             self.assertFalse((destination / "old.txt").exists())
 
-    def test_nightly_items_only_fill_missing_primary_entries(self):
+    def test_nightly_fills_untranslated_and_missing_primary_entries(self):
         extract = _load_stage("02_extract")
-        primary = [{"uid": "resource:primary", "existing_cn": "主包译文"}]
+        primary = [
+            {"uid": "g:translated", "existing_cn": "主包译文", "status": "existing"},
+            {"uid": "g:untranslated", "existing_cn": "日本語のまま", "status": "new"},
+            {"uid": "g:both-untranslated", "existing_cn": "日本語", "status": "new"},
+        ]
         nightly = [
-            {"uid": "resource:primary", "existing_cn": "nightly译文"},
-            {"uid": "resource:nightly", "existing_cn": "nightly补充"},
+            {"uid": "g:translated", "existing_cn": "nightly译文", "status": "existing"},
+            {"uid": "g:untranslated", "existing_cn": "nightly 的译文", "status": "existing"},
+            {"uid": "g:both-untranslated", "existing_cn": "日文", "status": "new"},
+            {"uid": "g:missing", "existing_cn": "nightly补充", "status": "existing"},
         ]
 
         items = extract._add_fallback_items(primary, nightly)
 
-        self.assertEqual(items, [primary[0], nightly[1]])
+        self.assertEqual(items, [
+            {"uid": "g:translated", "existing_cn": "主包译文", "status": "existing"},
+            {"uid": "g:untranslated", "existing_cn": "nightly 的译文", "status": "existing"},
+            {"uid": "g:both-untranslated", "existing_cn": "日本語", "status": "new"},
+            {"uid": "g:missing", "existing_cn": "nightly补充", "status": "existing"},
+        ])
 
 
 class PackageRegressionTests(unittest.TestCase):
@@ -824,19 +835,31 @@ class GenericRegressionTests(unittest.TestCase):
         fp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         return fp
 
-    def test_japanese_value_is_new_and_chinese_value_is_existing(self):
+    def test_key_copy_is_new_and_any_other_value_is_existing(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self._write_generic(root, {"こんにちは": "まだ日本語", "こんばんは": "晚上好", "おやすみ": ""})
+            self._write_generic(root, {
+                "こんにちは": "こんにちは",                      # 上游未翻译时原样抄键
+                "こんばんは": "晚上好",
+                "おやすみ": "",
+                "【カクシタワタシ】特訓段階": "【カクシタワタシ】特训阶段",   # 保留日文歌名的中文译文
+                "青空に\r\n": "青空に\n蓝天下\r\n",              # 双语歌词容器
+                "一つの夢": "一つの夢",                          # 源键为日文且原样抄键 → 待译
+                "[__split__]倍！": "[__split__]倍！",            # 源键本为中文片段 → 无需翻译
+            })
 
             items = extract_generic_text(root / "local-files" / "genericTrans")
 
         by_field = {item["field"]: item for item in items}
         self.assertEqual(by_field["こんにちは"]["status"], "new")
         self.assertEqual(by_field["こんにちは"]["jp"], "こんにちは")
+        self.assertEqual(by_field["おやすみ"]["status"], "new")
         self.assertEqual(by_field["こんばんは"]["status"], "existing")
         self.assertEqual(by_field["こんばんは"]["existing_cn"], "晚上好")
-        self.assertEqual(by_field["おやすみ"]["status"], "new")
+        self.assertEqual(by_field["【カクシタワタシ】特訓段階"]["status"], "existing")
+        self.assertEqual(by_field["青空に\r\n"]["status"], "existing")
+        self.assertEqual(by_field["一つの夢"]["status"], "new")
+        self.assertEqual(by_field["[__split__]倍！"]["status"], "existing")
         self.assertTrue(
             all(
                 item["file"] == "local-files/genericTrans/sample.json"

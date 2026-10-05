@@ -120,9 +120,25 @@ def _get_existing_resource_translation(
 
 
 def _add_fallback_items(primary_items: list[dict], fallback_items: list[dict]) -> list[dict]:
-    """Keep primary package entries and use nightly entries only when absent."""
-    primary_uids = {item["uid"] for item in primary_items}
-    return primary_items + [item for item in fallback_items if item["uid"] not in primary_uids]
+    """Keep primary package entries and take a fallback translation wherever it has none.
+
+    The fallback package supplements the primary one instead of replacing it. An
+    entry the primary still carries untranslated (``status == "new"``: its key is
+    present but the value is still Japanese) takes the fallback translation, so
+    it is neither shipped untranslated nor sent to the LLM a second time. Entries
+    the primary does not have at all are appended.
+    """
+    items = list(primary_items)
+    by_uid = {item["uid"]: item for item in primary_items}
+    for item in fallback_items:
+        current = by_uid.get(item["uid"])
+        if current is None:
+            by_uid[item["uid"]] = item
+            items.append(item)
+        elif current.get("status") == "new" and item.get("status") == "existing":
+            current["existing_cn"] = item["existing_cn"]
+            current["status"] = item["status"]
+    return items
 
 
 def _tag_labels(items: list[dict]) -> None:
