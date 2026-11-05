@@ -89,7 +89,7 @@ def _resource_sources_equal(old_jp: str, current_jp: str) -> bool:
 
 
 def _is_plain_resource_field(field: str) -> bool:
-    """Fields the existing mod stores without the <r\=JP>CN</r> wrapper."""
+    r"""Fields the existing mod stores without the <r\=JP>CN</r> wrapper."""
     return field == "name" or field.startswith("text[")
 
 

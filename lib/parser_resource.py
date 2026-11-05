@@ -24,43 +24,78 @@ def parse_adv_context(stem: str) -> dict:
         ctx["chapter"] = post
     return ctx
 
+_RE_KV_KEY = re.compile(r"\s*([A-Za-z_][\w-]*)=")
+_RE_NEXT_KEY = re.compile(r"[ \t]+[A-Za-z_][\w-]*=|(?<!\\)=")
+_RE_ESC_BRACE = re.compile(r'\\.|"')
+
+
 def _extract_all_kv(body: str) -> dict[str, str]:
     result = {}
     i = 0
-    while i < len(body):
-        m = re.match(r"(\w+)=", body[i:])
-        if not m: i += 1; continue
+    n = len(body)
+    while i < n:
+        m = _RE_KV_KEY.match(body, i)
+        if not m:
+            nxt = _RE_KV_KEY.search(body, i)
+            if not nxt:
+                break
+            m = nxt
         key = m.group(1)
-        i += m.end()
-        if i >= len(body): break
-        if body[i] == "{":
-            depth = 1; j = i + 1
-            while j < len(body) and depth > 0:
-                if body[j] == "{": depth += 1
-                elif body[j] == "}": depth -= 1
+        i = m.end()
+        if i >= n:
+            break
+        if body.startswith(r"\{", i):
+            depth = 0
+            in_str = False
+            end_j = n
+            for bm in _RE_ESC_BRACE.finditer(body, i):
+                tok = bm.group(0)
+                if tok == r'\"':
+                    in_str = not in_str
+                elif not in_str:
+                    if tok == r"\{":
+                        depth += 1
+                    elif tok == r"\}":
+                        depth -= 1
+                        if depth == 0:
+                            end_j = bm.end()
+                            break
+            result[key] = body[i:end_j]
+            i = end_j
+        elif body[i] == "{" and key not in ("text", "title", "name", "voice"):
+            depth = 1
+            j = i + 1
+            while j < n and depth > 0:
+                if body[j] == "{":
+                    depth += 1
+                elif body[j] == "}":
+                    depth -= 1
                 j += 1
             result[key] = body[i:j]
             i = j
         elif body[i] == "[":
-            depth = 1; j = i + 1
-            while j < len(body) and depth > 0:
-                if body[j] == "[": depth += 1
-                elif body[j] == "]": depth -= 1
+            depth = 1
+            j = i + 1
+            while j < n and depth > 0:
+                if body[j] == "[":
+                    depth += 1
+                elif body[j] == "]":
+                    depth -= 1
                 j += 1
             result[key] = body[i:j]
             i = j
         else:
-            j = i
-            while j < len(body):
-                if body[j] in (" ", "\t"):
-                    k = j + 1
-                    while k < len(body) and body[k] in (" ", "\t"):
-                        k += 1
-                    if k < len(body) and re.match(r"[a-zA-Z_]\w*=", body[k:]):
-                        break
-                elif body[j] == "=" and j > i and body[j-1] != "\\":
-                    break
-                j += 1
+            nm = _RE_NEXT_KEY.search(body, i)
+            if nm:
+                if nm.group(0) == "=":
+                    k = nm.start()
+                    while k > i and (body[k - 1].isalnum() or body[k - 1] in ("_", "-")):
+                        k -= 1
+                    j = k if k > i else nm.start()
+                else:
+                    j = nm.start()
+            else:
+                j = n
             result[key] = body[i:j]
             i = j
     return result

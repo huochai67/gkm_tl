@@ -1973,5 +1973,207 @@ class LLMBackendParamsTests(unittest.TestCase):
 
 
 
+class ScriptCheckerRegressionTests(unittest.TestCase):
+    def test_extract_and_build_preserve_text_starting_with_user_placeholder(self):
+        line = (
+            r"[message text={user}くん。\n先輩と呼んでくれたまえ？ name=麻央 "
+            r'clip=\{"_startTime":106.9,"_duration":3.6\}]'
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            fp = Path(directory) / "adv_amao.txt"
+            fp.write_text(line + "\n", encoding="utf-8")
+            extracted = extract_resource_text(fp)
+
+        self.assertEqual(
+            extracted,
+            [
+                {
+                    "line": 1,
+                    "command": "message",
+                    "field": "text",
+                    "jp": r"{user}くん。\n先輩と呼んでくれたまえ？",
+                },
+                {
+                    "line": 1,
+                    "command": "message",
+                    "field": "name",
+                    "jp": "麻央",
+                },
+            ],
+        )
+
+        built = build_resource_line(
+            line,
+            {"text": r"{user}君。\n请叫我前辈吧？", "name": "有村麻央"},
+        )
+        self.assertEqual(
+            built,
+            r"[message text=<r\={user}くん。>{user}君。</r>\r\n"
+            r"<r\=先輩と呼んでくれたまえ？>请叫我前辈吧？</r> name=有村麻央 "
+            r'clip=\{"_startTime":106.9,"_duration":3.6\}]',
+        )
+
+    def test_valid_translated_script_passes_and_builds_timeline_summary(self):
+        from lib.script_checker import check_script_text
+
+        source = "\n".join(
+            [
+                "[backgroundgroup backgrounds=[background id=classroom src=env_3d_adv_classroom-00-00-noon]]",
+                "[actorgroup actors=[actor id=amao body=mdl_chr_amao-schl-0000_body face=mdl_chr_amao-base-0000_face hair=mdl_chr_amao-base-0000_hair]]",
+                r'[actorlayoutgroup layouts=[actorlayout id=amao transform=\{"position":\{"x":0.0,"y":0.0,"z":0.0\}\}] clip=\{"_startTime":0.0,"_duration":0.0\}]',
+                r'[message text={user}くん、『<r\=セレクション>選抜試験</r>』\nお疲れ様。 name=麻央 se=sud_se_adv_message-01 clip=\{"_startTime":0.8,"_duration":3.2\}]',
+                r'[voice voice=sud_vo_adv_dear_amao_001_amao-001 actorId=amao channel=1 clip=\{"_startTime":0.9,"_duration":3.0\}]',
+                r'[actormotion id=amao motion=mot_all_chr_cmmn_talk-001_in transition=0.7 clip=\{"_startTime":0.8,"_duration":2.0\}]',
+                r'[choicegroup choices=[choice text=ありがとう hideMessage=true] choices=[choice text=頑張ろう] clip=\{"_startTime":4.5,"_duration":1.0\}]',
+                "[branchgroup type=Choice groupLength=2]",
+                "[branch groupLength=1]",
+                r'[message text=どういたしまして。 name=麻央 clip=\{"_startTime":5.5,"_duration":1.5\}]',
+                "[branch groupLength=0]",
+                "[timeline]",
+            ]
+        )
+        translated = "\n".join(
+            [
+                "[backgroundgroup backgrounds=[background id=classroom src=env_3d_adv_classroom-00-00-noon]]",
+                "[actorgroup actors=[actor id=amao body=mdl_chr_amao-schl-0000_body face=mdl_chr_amao-base-0000_face hair=mdl_chr_amao-base-0000_hair]]",
+                r'[actorlayoutgroup layouts=[actorlayout id=amao transform=\{"position":\{"x":0.0,"y":0.0,"z":0.0\}\}] clip=\{"_startTime":0.0,"_duration":0.0\}]',
+                r'[message text=<r\={user}くん、『<r\=セレクション>選抜試験</r>』>{user}君，“<r\=セレクション>选拔考试</r>”</r>\r\n<r\=お疲れ様。>辛苦了。</r> name=有村麻央 se=sud_se_adv_message-01 clip=\{"_startTime":0.8,"_duration":3.2\}]',
+                r'[voice voice=sud_vo_adv_dear_amao_001_amao-001 actorId=amao channel=1 clip=\{"_startTime":0.9,"_duration":3.0\}]',
+                r'[actormotion id=amao motion=mot_all_chr_cmmn_talk-001_in transition=0.7 clip=\{"_startTime":0.8,"_duration":2.0\}]',
+                r'[choicegroup choices=[choice text=谢谢你 hideMessage=true] choices=[choice text=一起加油吧] clip=\{"_startTime":4.5,"_duration":1.0\}]',
+                "[branchgroup type=Choice groupLength=2]",
+                "[branch groupLength=1]",
+                r'[message text=<r\=どういたしまして。>不客气。</r> name=有村麻央 clip=\{"_startTime":5.5,"_duration":1.5\}]',
+                "[branch groupLength=0]",
+                "[timeline]",
+            ]
+        )
+
+        report = check_script_text(
+            translated,
+            "adv_dear_amao_001.txt",
+            source_text=source,
+            check_untranslated=True,
+        )
+        self.assertTrue(report["ok"], report["issues"])
+        self.assertEqual(report["error_count"], 0)
+        self.assertEqual(report["warning_count"], 0)
+        summary = report["summary"]
+        self.assertEqual(summary["cue_count"], 12)
+        self.assertEqual(summary["message_count"], 2)
+        self.assertEqual(summary["choice_count"], 2)
+        self.assertEqual(summary["voice_count"], 1)
+        self.assertEqual(summary["duration"], 7.0)
+        self.assertEqual(summary["actors"], ["amao"])
+        self.assertEqual(summary["backgrounds"], ["classroom"])
+        self.assertIn("mdl_chr_amao-schl-0000_body", summary["bundles"])
+        self.assertIn("t_chr_amao-base-0000", summary["bundles"])
+        self.assertIn("env_3d_adv_classroom-00-00-noon", summary["bundles"])
+        self.assertIn("t_sky_noon-00", summary["bundles"])
+        self.assertIn("mot_all_chr_cmmn_talk-001_in", summary["bundles"])
+        self.assertIn("sud_vo_adv_dear_amao_001.acb", summary["resources"])
+        self.assertIn("sud_se_adv_message-01.acb", summary["resources"])
+
+    def test_checker_detects_syntax_markup_and_wrapper_errors(self):
+        from lib.script_checker import check_script_text
+
+        broken = "\n".join(
+            [
+                "not_a_bracketed_command",
+                "[unknowncmd foo=bar]",
+                "[actor id=amao body=b face=f hair=h]",
+                r'[message text=<r=よみ>語</r> name=咲季 clip=\{"_startTime":-1.0,"_duration":1.0\}]',
+                r'[message text=<r\=おはよう>早上好 name=咲季 clip=\{"_startTime":1.0,"_duration":1.0\}]',
+                r'[message text=<r\=こんにちは {user}>你好</r> name=咲季 clip=\{"_startTime":2.0,"_duration":1.0\}]',
+                r'[message text=<r\=テスト></r> name=咲季 clip=\{"_startTime":3.0,"_duration":1.0\}]',
+                r'[choicegroup choices=[choice text=<r\=独占したかったから]>因为我想独占你</r>] clip=none]',
+                r'[fade clip=\{"_startTime":1.0]',
+            ]
+        )
+
+        report = check_script_text(broken, "adv_broken.txt")
+        self.assertFalse(report["ok"])
+        codes = {issue["code"] for issue in report["issues"]}
+        self.assertIn("unbracketed_line", codes)
+        self.assertIn("unknown_command", codes)
+        self.assertIn("nested_command_at_top", codes)
+        self.assertIn("unescaped_tag_equals", codes)
+        self.assertIn("invalid_clip_timing", codes)
+        self.assertIn("unbalanced_ruby_tag", codes)
+        self.assertIn("wrapper_placeholder_mismatch", codes)
+        self.assertIn("empty_translation_text", codes)
+        self.assertIn("unclosed_json", codes)
+
+    def test_checker_detects_source_parity_and_reference_issues(self):
+        from lib.script_checker import check_script_text
+
+        source = "\n".join(
+            [
+                "[backgroundgroup backgrounds=[background id=room src=env_2d_adv_room]]",
+                "[actorgroup actors=[actor id=hski body=b face=f hair=h]]",
+                r'[message text=一行目\n二行目 {user} name=咲季 se=sud_se_adv_message-01 clip=\{"_startTime":0.0,"_duration":2.0\}]',
+                r'[actormotion id=hski motion=mot_all_chr_cmmn_talk-001_in clip=\{"_startTime":0.0,"_duration":1.0\}]',
+            ]
+        )
+        # Target has: wrong source JP in wrapper, missing \n, missing {user},
+        # dropped se=, and undeclared actor in actormotion.
+        target = "\n".join(
+            [
+                "[backgroundgroup backgrounds=[background id=room src=env_2d_adv_room]]",
+                "[actorgroup actors=[actor id=hski body=b face=f hair=h]]",
+                r'[message text=<r\=別の原文>只有一行译文</r> name=花海咲季 clip=\{"_startTime":0.0,"_duration":2.0\}]',
+                r'[actormotion id=ttmr motion=mot_all_chr_cmmn_talk-001_in clip=\{"_startTime":0.0,"_duration":1.0\}]',
+            ]
+        )
+
+        report = check_script_text(target, "adv_parity.txt", source_text=source)
+        self.assertFalse(report["ok"])
+        codes = {issue["code"] for issue in report["issues"]}
+        self.assertIn("non_text_param_modified", codes)
+        self.assertIn("stale_source_text", codes)
+        self.assertIn("source_newline_mismatch", codes)
+        self.assertIn("source_placeholder_mismatch", codes)
+        self.assertIn("undeclared_actor", codes)
+        self.assertIn("non_text_command_modified", codes)
+
+    def test_check_txt_cli_tool_exit_codes_and_json_report(self):
+        check_tool = _load_tool("check_txt")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            valid_fp = root / "adv_valid.txt"
+            valid_fp.write_text(
+                r'[message text=<r\=おはよう>早上好</r> name=咲季 clip=\{"_startTime":0.0,"_duration":1.0\}]'
+                "\n[timeline]\n",
+                encoding="utf-8",
+            )
+            json_out = root / "report.json"
+
+            rc_ok = check_tool.main([str(valid_fp), "--json", str(json_out)])
+            self.assertEqual(rc_ok, 0)
+            payload = json.loads(json_out.read_text(encoding="utf-8"))
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["total_files"], 1)
+
+            # Untranslated warning fails only under --strict
+            untrans_fp = root / "adv_untrans.txt"
+            untrans_fp.write_text(
+                r'[message text=おはようございます name=咲季 clip=\{"_startTime":0.0,"_duration":1.0\}]'
+                "\n[timeline]\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                check_tool.main([str(untrans_fp), "--check-untranslated"]), 0
+            )
+            self.assertEqual(
+                check_tool.main([str(untrans_fp), "--check-untranslated", "--strict"]),
+                1,
+            )
+
+            # Hard syntax error always returns 1
+            bad_fp = root / "adv_bad.txt"
+            bad_fp.write_text("[message text=<r=bad>x</r> clip=none]\n", encoding="utf-8")
+            self.assertEqual(check_tool.main([str(bad_fp)]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

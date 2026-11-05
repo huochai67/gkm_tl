@@ -200,6 +200,25 @@ uv run tools/export_pending.py --status changed
 
 导出的 JSON 文件保存在 `cache/new.json` 或 `cache/changed.json`，格式清晰易读，方便用于人工校对、统计或自建翻译数据集。
 
+
+### ADV `.txt` 脚本检查器 (`check_txt.py`)
+
+基于游戏原生 `Campus.ADV` / `Uguiss` 指令规范与时间轴解析器，对原始或汉化后的 `adv_*.txt` 剧本进行语法、指令 Schema、富文本标签（`<r\=...>` / `<em\=...>`）、时间轴/角色/背景引用一致性以及源脚本差分对账检查：
+
+```bash
+# 自动检查构建产物或缓存中的 adv_*.txt（若存在 cache/server/res_raw 则自动进行源脚本对账）
+uv run tools/check_txt.py
+
+# 检查指定脚本或目录，并输出时间轴摘要（指令数、台词数、语音数、时长、角色、背景）
+uv run tools/check_txt.py --summary output/GakumasTranslationData/local-files/resource
+
+# 与原始日文脚本逐行对账，并检查残留未翻译假名
+uv run tools/check_txt.py output/GakumasTranslationData/local-files/resource \
+  --source cache/server/res_raw --check-untranslated
+
+# 导出结构化 JSON 检查报告，或在出现告警时同样返回非零退出码 (--strict)
+uv run tools/check_txt.py --strict --json cache/txt_check_report.json
+```
 ---
 
 ## 📂 项目结构
@@ -223,6 +242,7 @@ gkm-tl/
 │   ├── octo.py                # Octo 客户端与资源解密
 │   ├── text_utils.py          # 日文字符与假名识别工具
 │   ├── parser_resource.py     # 冒险剧情脚本解析器
+│   ├── script_checker.py      # ADV .txt 脚本语法、时间轴与对账检查器
 │   ├── parser_master.py       # Master YAML 解析与快照比对
 │   ├── parser_generic.py      # Generic JSON 翻译解析器
 │   ├── parser_localization.py # Localization UI 文本解析器
@@ -230,7 +250,8 @@ gkm-tl/
 │       └── octodb_pb2.py
 │
 ├── tools/                     # 辅助工具集
-│   └── export_pending.py      # 提取条目导出工具
+│   ├── export_pending.py      # 提取条目导出工具
+│   └── check_txt.py           # ADV .txt 脚本检查工具
 │
 ├── tests/                     # 自动化测试套件
 │   └── test_regressions.py    # 回归与单元测试
