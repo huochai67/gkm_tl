@@ -1,11 +1,17 @@
 import json
+import re
 from collections import Counter
 from pathlib import Path
-from ruamel.yaml import YAML, YAMLError
+import yaml
+from yaml import YAMLError
 from lib.text_utils import contains_japanese
 
-yaml_loader = YAML(typ='safe')
-
+_YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+# Strip nested sequence-of-mappings blocks (e.g. `produceDescriptions`) that
+# `extract_master_text` never reads, avoiding parsing 100+ MB of nested dicts.
+_RE_NESTED_SEQ = re.compile(
+    r"(?m)^  [A-Za-z0-9_]+:\r?\n  - .*(?:\r?\n(?:  - .*|    .*|))*"
+)
 _MISSING = object()
 _DEFAULT_PRIMARY_KEYS = ("id",)
 
@@ -103,9 +109,20 @@ def extract_master_text(
         name = yaml_fp.stem
         size_mb = yaml_fp.stat().st_size / (1024*1024)
         print(f"  [{fi+1}/{len(yaml_files)}] {yaml_fp.name} ({size_mb:.1f}MB)...", end="", flush=True)
+        raw_text = yaml_fp.read_text(encoding="utf-8")
+        if not raw_text.strip() or raw_text.strip() == "[]":
+            print(f" empty", flush=True)
+            continue
+        if not contains_japanese(raw_text):
+            print(f" {len(results)} items total", flush=True)
+            continue
+        stripped_text = _RE_NESTED_SEQ.sub("", raw_text)
+        if not contains_japanese(stripped_text):
+            print(f" {len(results)} items total", flush=True)
+            continue
         try:
-            records = yaml_loader.load(yaml_fp.read_text(encoding="utf-8"))
-        except YAMLError as e:
+            records = yaml.load(stripped_text, Loader=_YAML_LOADER)
+        except YAMLError:
             print(f" SKIP (YAML error)", flush=True)
             continue
         if not records:

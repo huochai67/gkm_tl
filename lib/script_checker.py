@@ -938,12 +938,14 @@ def check_text_value(
                         "empty_translation_text",
                         f"字段 {field} 第 {seg_idx + 1} 段 '<r\\=原文>译文</r>' 的译文为空",
                     )
-                if jp_seg.count(r"\n") != cn_seg.count(r"\n"):
+                jp_nl = jp_seg.count(r"\n")
+                cn_nl = cn_seg.count(r"\n")
+                if jp_nl != cn_nl:
                     add(
                         "warning",
                         "wrapper_newline_mismatch",
                         f"字段 {field} 第 {seg_idx + 1} 段内字面 '\\n' 数量不一致 "
-                        f"(原文 {jp_seg.count(r'\n')} vs 译文 {cn_seg.count(r'\n')})",
+                        f"(原文 {jp_nl} vs 译文 {cn_nl})",
                     )
 
             jp_ph = Counter(_RE_PLACEHOLDER.findall(full_jp))
@@ -1599,7 +1601,9 @@ def _check_source_parity(
                     else:
                         compare_text = tgt_val
 
-                    if src_jp.count(r"\n") != compare_text.count(r"\n"):
+                    src_nl = src_jp.count(r"\n")
+                    tgt_nl = compare_text.count(r"\n")
+                    if src_nl != tgt_nl:
                         add(
                             line_no,
                             "error",
@@ -1607,7 +1611,7 @@ def _check_source_parity(
                             tcmd,
                             src_field,
                             f"字段 {src_field} 换行数量与源脚本不一致 "
-                            f"(源脚本 {src_jp.count(r'\n')} vs 当前 {compare_text.count(r'\n')})",
+                            f"(源脚本 {src_nl} vs 当前 {tgt_nl})",
                         )
                     src_ph = Counter(_RE_PLACEHOLDER.findall(src_jp))
                     tgt_ph = Counter(_RE_PLACEHOLDER.findall(compare_text))
@@ -1678,7 +1682,9 @@ def _check_source_parity(
                         if (complete and _is_translation_wrapper(t_ct, segments))
                         else t_ct
                     )
-                    if s_ct.count(r"\n") != compare_ct.count(r"\n"):
+                    src_nl = s_ct.count(r"\n")
+                    tgt_nl = compare_ct.count(r"\n")
+                    if src_nl != tgt_nl:
                         add(
                             line_no,
                             "error",
@@ -1686,7 +1692,7 @@ def _check_source_parity(
                             "choice",
                             field_name,
                             f"选项 {field_name} 字面 '\\n' 数量与源脚本不一致 "
-                            f"(源脚本 {s_ct.count(r'\n')} vs 当前 {compare_ct.count(r'\n')})",
+                            f"(源脚本 {src_nl} vs 当前 {tgt_nl})",
                         )
                     if Counter(_RE_PLACEHOLDER.findall(s_ct)) != Counter(
                         _RE_PLACEHOLDER.findall(compare_ct)

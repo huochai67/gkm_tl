@@ -46,17 +46,21 @@ def repeated_source_end(text: str, source: str) -> int | None:
         position = index + len(token)
     return position
 
+_RE_JAPANESE = re.compile(r"[\u3000-\u9fff]")
+_RE_KANA = re.compile(r"[\u3040-\u309f\u30a1-\u30fa]")
+_RE_HASHTAG = re.compile(r"#[^\s#]+")
+
 
 def contains_japanese(text: str) -> bool:
-    return any("\u3000" <= char <= "\u9fff" for char in text)
+    if text.isascii():
+        return False
+    return bool(_RE_JAPANESE.search(text))
 
 
 def looks_like_japanese_source(text: str) -> bool:
     """True when text still contains kana, i.e. likely untranslated Japanese."""
+    if text.isascii():
+        return False
     # Translation strings can retain Japanese hashtags; these are not source text.
-    text = re.sub(r"#[^\s#]+", "", text)
-    return any(
-        "\u3040" <= char <= "\u309f"  # hiragana
-        or "\u30a1" <= char <= "\u30fa"  # katakana, excluding punctuation
-        for char in text
-    )
+    text = _RE_HASHTAG.sub("", text)
+    return bool(_RE_KANA.search(text))

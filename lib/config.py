@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from ruamel.yaml import YAML
+import yaml
 
 DEFAULT_CONFIG = str(Path(__file__).parent.parent / "config.yaml")
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -49,8 +49,11 @@ _ENV_TO_LLM = {
     "LLM_SKIP_CHANGED": ("skip_changed", _parse_bool),
 }
 
+_YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
 def load_config(path: str = DEFAULT_CONFIG) -> dict:
-    cfg = YAML(typ='safe').load(Path(path).read_text(encoding="utf-8")) or {}
+    cfg = yaml.load(Path(path).read_text(encoding="utf-8"), Loader=_YAML_LOADER) or {}
     cfg["char_map"] = {}
     for jp, cn in cfg.get("character_names", {}).items():
         cfg["char_map"][jp] = cn

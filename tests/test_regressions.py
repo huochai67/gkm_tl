@@ -653,6 +653,49 @@ class MasterRegressionTests(unittest.TestCase):
         self.assertEqual(item["existing_cn"], "nightly译文")
         self.assertEqual(item["status"], "existing")
 
+    def test_master_skips_yaml_parsing_when_file_has_no_japanese(self):
+        import lib.parser_master as pm
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            yaml_dir = root / "yaml"
+            mod_dir = root / "mod"
+            yaml_dir.mkdir()
+            mod_dir.mkdir()
+            (yaml_dir / "ascii_only.yaml").write_text(
+                "- id: 1\n  code: EFFECT_UP\n  value: 100\n",
+                encoding="utf-8",
+            )
+            (yaml_dir / "nested_only.yaml").write_text(
+                "- id: 1\n"
+                "  produceDescriptions:\n"
+                "  - produceDescriptionType: PlainText\n"
+                "    text: アクティブスキルカード\n"
+                "  order: 1\n",
+                encoding="utf-8",
+            )
+            (yaml_dir / "has_jp.yaml").write_text(
+                "- id: 1\n  name: テスト\n",
+                encoding="utf-8",
+            )
+
+            loaded_texts = []
+            orig_load = pm.yaml.load
+
+            def spy_load(stream, *args, **kwargs):
+                loaded_texts.append(stream)
+                return orig_load(stream, *args, **kwargs)
+
+            pm.yaml.load = spy_load
+            try:
+                items = extract_master_text(yaml_dir, mod_dir)
+            finally:
+                pm.yaml.load = orig_load
+
+        self.assertEqual(len(loaded_texts), 1)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["jp"], "テスト")
+
 
 class DownloadRegressionTests(unittest.TestCase):
     def test_failed_asset_is_not_cached_and_is_retried(self):
