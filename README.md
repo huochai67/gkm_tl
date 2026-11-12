@@ -54,7 +54,7 @@ flowchart LR
 
 | 阶段 | 脚本 | 职责与核心逻辑 | 产物 / 缓存 |
 | :--- | :--- | :--- | :--- |
-| **Stage 1: 下载** | `stages/01_download.py` | 1. 请求 Octo API 并解密获取资源清单，多线程下载 `adv_*.txt`。<br/>2. 下载 GitHub Release 现有中文模版。<br/>3. 下载 gkm_tl nightly 补充模版（可通过配置关闭）。<br/>4. 下载并解压 `gakumasu-diff` master 数据。 | `cache/server/`<br/>`cache/mod/`<br/>`cache/nightly/`<br/>`cache/gkm-diff/` |
+| **Stage 1: 下载** | `stages/01_download.py` | 1. 请求 Octo API 并解密获取资源清单；若 `revision` 与上次一致（本地缓存或 `PREVIOUS_OCTO_REVISION`），写入 `cache/nothing_to_translate` 并直接跳过后续下载与翻译；否则多线程下载 `adv_*.txt`。<br/>2. 下载 GitHub Release 现有中文模版。<br/>3. 下载 gkm_tl nightly 补充模版（可通过配置关闭）。<br/>4. 下载并解压 `gakumasu-diff` master 数据。 | `cache/server/`<br/>`cache/mod/`<br/>`cache/nightly/`<br/>`cache/gkm-diff/` |
 | **Stage 2: 提取** | `stages/02_extract.py` | 针对 4 种数据源进行提取与对比，建立唯一的条目 UID，标记 `new` / `existing` / `changed`：<br/>• **Resource**: 冒险脚本，提取 `message`/`narration`/`title`/`choicegroup`，支持 `<r\=JP>CN</r>` 语法；`name` 与 choicegroup 的裸中文值同样视为既有译文。<br/>• **Master**: YAML 数据与快照比对，按 overlay 声明的复合主键（`rules.primaryKeys`，剔除无法标量求值的关系型路径）匹配记录，重复主键按出现次序区分；快照以稳定 UID 记录原文，用于识别 `changed`。<br/>• **Generic**: `genericTrans/**/*.json` 键值提取；上游以"原样抄键"表示未翻译，因此**值≠键即视为已有译文**（含保留日文人名/歌名的译文与 `源行\n译文` 双语歌词容器），只有源键为日文且值仍等于键的条目才算待译。<br/>• **Localization**: 递归提取 `localization.json` 并通过假名检测判定未翻译文本。<br/>开启 `use_nightly` 时，上游缺失**或仍未翻译**（值仍为日文）的条目采用 nightly 补充模版的译文，避免重复翻译。<br/>所有条目附带 `hash`（uid 的 64 位十六进制摘要），作为翻译阶段的请求内短标识。 | `cache/extract.json` |
 | **Stage 3: 翻译** | `stages/03_translate.py` | 1. 筛选待翻译文本（默认仅翻译 `new`，可配置开启 `changed` 翻译）。<br/>2. 按 `类别:文件` 分组、按 `batch_size` 切批，组装含 `[任务]/[输出格式]/[规则]/[背景]/[本批上下文]/[参考译文]/[输入]` 的 Prompt（作品背景、角色中文名表、字段语义、场景与说话人）。<br/>3. 请求带 `response_format: {"type":"json_schema", "json_schema":{"name":"game_text_translations",...}}`，要求返回 `{"translations":[{"id","translation"}]}`，其中 `id` 是输入行 `[]` 内的短标识（`hash`）；解析按标识**严格**对齐而非按位置：标识必须逐字一致，未知/改写过的标识、重复标识与非法 JSON 一律拒绝。uid 只作为本地身份，不进入 Prompt。<br/>4. 失败逐级降级：整批 → 仅失败条目 repair → 单条重发；JSON 中转义歧义（原文的字面 `\n` 被模型写成真实换行）会按原文结构无损还原后再校验；线程池并发调用，实时保存 Checkpoint。<br/>5. 若无待翻译条目，生成 `cache/nothing_to_translate` 标记并提前结束。 | `cache/translated.json`<br/>`cache/translate_checkpoint.json` |
 | **Stage 4: 构建** | `stages/04_build.py` | 按照插件规范重构完整目录结构：<br/>• `resource/*.txt`：`message`/`narration`/`title` 替换为 `text=<r\=日文原文>中文翻译</r>`，`choicegroup` 与 `name` 沿用上游模版已有中文（与上游一致），`name` 缺失时回退到 `character_names` 全名。<br/>• `masterTrans/*.json`：按主键将译文写回 overlay 对应记录，并重建 Master 源文本快照。<br/>• `genericTrans/*.json` 与 `localization.json`：写回翻译字段；其中键以换行结尾的歌词条目（如 `lyrics/srt_live_*.json`）按文件自身既有条目的形态套回容器——多数文件为「源行 + `\n` + 译文 + 原行尾符」，`index/*` 等仅存译文的文件则不加源行。<br/>• 写入 `version.txt` 构建版本号。 | `output/GakumasTranslationData/`<br/>`cache/master_source_snapshot.json` |
@@ -163,10 +163,11 @@ uv run python stages/05_package.py    # 阶段 5: 打包生成 ZIP
 
 ### 环境变量对照
 
-所有关键参数均支持通过环境变量直接覆盖（环境变量优先级高于 `config.yaml`），方便在 CI/CD 中通过 Secrets 注入：
+支持直接通过环境变量运行（无需创建 `config.yaml`，缺省时自动加载内置默认配置 / `config.yaml.example`），环境变量优先级高于配置文件，方便在 CI/CD 中直接注入：
 
 | 环境变量 | 覆盖配置项 | 说明 |
 | :--- | :--- | :--- |
+| `CONFIG_PATH` | *(配置文件路径)* | 指定自定义配置文件路径（默认 `config.yaml`） |
 | `LLM_BASE_URL` | `llm.base_url` | API Base URL |
 | `LLM_API_KEY` | `llm.api_key` | API Key |
 | `LLM_MODEL` | `llm.model` | 模型名称 |
@@ -177,8 +178,24 @@ uv run python stages/05_package.py    # 阶段 5: 打包生成 ZIP
 | `LLM_TEMPERATURE` | `llm.temperature` | 采样温度（浮点数） |
 | `LLM_REASONING_EFFORT` | `llm.reasoning_effort` | 思考等级（`none` / `minimal` / `low` / `medium` / `high`） |
 | `LLM_SKIP_CHANGED` | `llm.skip_changed` | 是否跳过 `changed` 条目（`1/0`、`true/false` 等） |
+| `PATHS_SERVER_CACHE` | `paths.server_cache` | Octo 原始资源缓存目录 |
+| `PATHS_MOD_CACHE` | `paths.mod_cache` | 上游 Release 模版缓存目录 |
+| `PATHS_NIGHTLY_MOD_CACHE` | `paths.nightly_mod_cache` | Nightly 模版缓存目录 |
+| `PATHS_GKM_DIFF` | `paths.gkm_diff` | gakumasu-diff 缓存目录 |
+| `PATHS_OUTPUT` | `paths.output` | 构建产物输出目录 |
+| `GITHUB_OWNER` | `github.owner` | 上游汉化仓库所有者 |
+| `GITHUB_REPO` | `github.repo` | 上游汉化仓库名称 |
+| `GITHUB_USE_NIGHTLY` | `github.use_nightly` | 是否使用 nightly 补充模版（`1/0`、`true/false` 等） |
+| `OCTO_APP_ID` | `octo.app_id` | Octo App ID（整数） |
+| `OCTO_CLIENT_SECRET` | `octo.client_secret` | Octo Client Secret |
+| `OCTO_VERSION` | `octo.version` | 游戏客户端资源版本号 |
+| `OCTO_URL` | `octo.url` | Octo 资源服务器 URL |
+| `OCTO_API_KEY_SEED` | `octo.api_key_seed` | Octo API 解密密钥种子 |
+| `OCTO_CACHE_KEY` | `octo.cache_key` | 本地缓存 AES Key (Hex) |
+| `OCTO_CACHE_IV` | `octo.cache_iv` | 本地缓存 AES IV (Hex) |
+| `OCTO_DATA_PATH` | `octo.data_path` | Octo 清单缓存目录 |
+| `PREVIOUS_OCTO_REVISION` | — | 上次构建的 Octo Revision（相同时跳过下载、翻译与发布） |
 | `BUILD_VERSION` | `version.txt` | 构建版本号（默认自动生成为 `auto-YYYY-MM-DD`） |
-
 ---
 
 ## 🛠️ 辅助工具

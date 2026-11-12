@@ -1,4 +1,4 @@
-import sys, json, shutil, tempfile, urllib.request, zipfile, io
+import os, sys, json, shutil, tempfile, urllib.request, zipfile, io
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from lib.octo import OctoClient
@@ -45,6 +45,30 @@ def _download(url: str, timeout: int) -> bytes:
     return response.read()
 
 
+def _load_previous_revision(server_dir: Path, client: OctoClient) -> int | None:
+    env_rev = os.environ.get("PREVIOUS_OCTO_REVISION")
+    if env_rev is not None and env_rev.strip():
+        try:
+            return int(env_rev.strip())
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid value for PREVIOUS_OCTO_REVISION: {env_rev!r}"
+            ) from exc
+    index_path = server_dir / "octo_index.json"
+    if index_path.exists():
+        try:
+            data = json.loads(index_path.read_text(encoding="utf-8"))
+            rev = data.get("revision")
+            if isinstance(rev, int):
+                return rev
+        except (json.JSONDecodeError, OSError):
+            pass
+    local_db = client.load_local_db()
+    if local_db and local_db.revision:
+        return int(local_db.revision)
+    return None
+
+
 def main():
     global SERVER, MOD, NIGHTLY_MOD, GKM_DIFF
     config = load_config()
@@ -53,11 +77,13 @@ def main():
     MOD = paths["mod_cache"]
     NIGHTLY_MOD = paths["nightly_mod_cache"]
     GKM_DIFF = paths["gkm_diff"]
+    cache_dir = SERVER.parent
     SERVER.mkdir(parents=True, exist_ok=True)
     MOD.mkdir(parents=True, exist_ok=True)
 
     print("[1/3] Loading Octo resources...")
     client = OctoClient(config.get("octo", {}))
+    previous_revision = _load_previous_revision(SERVER, client)
 
     refreshed = False
     try:
@@ -85,6 +111,13 @@ def main():
     }
     (SERVER / "octo_index.json").write_text(json.dumps(octo_index, ensure_ascii=False), encoding="utf-8")
 
+    marker = cache_dir / "nothing_to_translate"
+    if previous_revision is not None and previous_revision == db.revision:
+        marker.write_text("", encoding="utf-8")
+        print(f"  Octo revision unchanged ({db.revision}); skipping download and translation.", flush=True)
+        return
+    if marker.exists():
+        marker.unlink()
     print("[2/3] Downloading adv TXT files...")
     count = client.download_adv_txts(db, SERVER / "res_raw")
     print(f"  {count} files", flush=True)

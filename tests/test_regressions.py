@@ -743,6 +743,102 @@ class DownloadRegressionTests(unittest.TestCase):
             self.assertEqual((destination / "new.txt").read_text(encoding="utf-8"), "new")
             self.assertFalse((destination / "old.txt").exists())
 
+    def test_unchanged_revision_skips_download_and_writes_marker(self):
+        download = _load_stage("01_download")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "cache"
+            server_dir = cache_dir / "server"
+            mod_dir = cache_dir / "mod"
+            server_dir.mkdir(parents=True)
+            (server_dir / "octo_index.json").write_text(
+                json.dumps({"revision": 12345}), encoding="utf-8"
+            )
+
+            db = octop.Database(revision=12345, urlFormat="https://assets/{o}")
+            res = db.resourceList.add()
+            res.name = "adv_test.txt"
+            res.objectName = "obj"
+
+            dl_called = False
+
+            class FakeClient:
+                def __init__(self, cfg):
+                    pass
+
+                def load_local_db(self):
+                    return None
+
+                def fetch_database(self):
+                    return db
+
+                def save_local_db(self, _):
+                    pass
+
+                def download_adv_txts(self, *_):
+                    nonlocal dl_called
+                    dl_called = True
+                    return 1
+
+            download.OctoClient = FakeClient
+            download.load_config = lambda: {}
+            download.resolve_paths = lambda cfg: {
+                "server_cache": server_dir,
+                "mod_cache": mod_dir,
+                "nightly_mod_cache": cache_dir / "nightly",
+                "gkm_diff": cache_dir / "gkm-diff",
+            }
+
+            with patch.dict("os.environ", {}, clear=False):
+                download.main()
+
+            self.assertFalse(dl_called)
+            self.assertTrue((cache_dir / "nothing_to_translate").exists())
+
+    def test_previous_octo_revision_env_triggers_skip_when_equal(self):
+        download = _load_stage("01_download")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "cache"
+            server_dir = cache_dir / "server"
+            mod_dir = cache_dir / "mod"
+
+            db = octop.Database(revision=999, urlFormat="https://assets/{o}")
+            dl_called = False
+
+            class FakeClient:
+                def __init__(self, cfg):
+                    pass
+
+                def load_local_db(self):
+                    return None
+
+                def fetch_database(self):
+                    return db
+
+                def save_local_db(self, _):
+                    pass
+
+                def download_adv_txts(self, *_):
+                    nonlocal dl_called
+                    dl_called = True
+                    return 0
+
+            download.OctoClient = FakeClient
+            download.load_config = lambda: {}
+            download.resolve_paths = lambda cfg: {
+                "server_cache": server_dir,
+                "mod_cache": mod_dir,
+                "nightly_mod_cache": cache_dir / "nightly",
+                "gkm_diff": cache_dir / "gkm-diff",
+            }
+
+            with patch.dict("os.environ", {"PREVIOUS_OCTO_REVISION": "999"}):
+                download.main()
+
+            self.assertFalse(dl_called)
+            self.assertTrue((cache_dir / "nothing_to_translate").exists())
+
     def test_nightly_fills_untranslated_and_missing_primary_entries(self):
         extract = _load_stage("02_extract")
         primary = [
@@ -1946,6 +2042,39 @@ class LLMConfigRegressionTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     load_config(str(path))
 
+
+    def test_load_config_without_config_yaml_uses_defaults_and_env(self):
+        import lib.config as config_mod
+
+        with tempfile.TemporaryDirectory() as directory:
+            missing_default = str(Path(directory) / "nonexistent.yaml")
+            with (
+                patch.object(config_mod, "DEFAULT_CONFIG", missing_default),
+                patch.dict(
+                    "os.environ",
+                    {
+                        "LLM_BASE_URL": "https://api.example.com/v1",
+                        "LLM_API_KEY": "sk-test",
+                        "LLM_MODEL": "test-model",
+                        "GITHUB_OWNER": "custom-owner",
+                        "GITHUB_USE_NIGHTLY": "false",
+                        "OCTO_APP_ID": "500",
+                        "OCTO_VERSION": "800000",
+                        "PATHS_OUTPUT": "custom_out",
+                    },
+                ),
+            ):
+                cfg = load_config()
+
+        self.assertEqual(cfg["llm"]["base_url"], "https://api.example.com/v1")
+        self.assertEqual(cfg["llm"]["api_key"], "sk-test")
+        self.assertEqual(cfg["llm"]["model"], "test-model")
+        self.assertEqual(cfg["github"]["owner"], "custom-owner")
+        self.assertFalse(cfg["github"]["use_nightly"])
+        self.assertEqual(cfg["octo"]["app_id"], 500)
+        self.assertEqual(cfg["octo"]["version"], "800000")
+        self.assertEqual(cfg["paths"]["output"], "custom_out")
+        self.assertEqual(cfg["char_map"]["amao"], "有村麻央")
 
 class LLMBackendParamsTests(unittest.TestCase):
     def _capture_post(self, response):

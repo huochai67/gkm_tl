@@ -22,8 +22,13 @@ if __name__ == "__main__":
         ("04_build",    "stages/04_build.py"),
         ("05_package",  "stages/05_package.py"),
     ]
+    if NO_NEW_MARKER.exists():
+        NO_NEW_MARKER.unlink()
     for name, path in stages:
         run_stage(name, path)
+        if name == "01_download" and NO_NEW_MARKER.exists():
+            print("\nOcto revision unchanged — skipping extract, translate, build & package.", flush=True)
+            sys.exit(0)
         if name == "03_translate" and NO_NEW_MARKER.exists():
             print("\nNo new translation items — skipping build & package.", flush=True)
             sys.exit(0)
