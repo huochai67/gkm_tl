@@ -1800,6 +1800,7 @@ class LLMConfigAndBackendTests(unittest.TestCase):
         self.assertEqual(resolved["cache_dir"], Path("/tmp/custom_gkm_cache"))
         self.assertEqual(resolved["server_cache"], Path("/tmp/other_disk/server"))
         self.assertEqual(config["character_names"]["shro"], "筱泽广")
+        self.assertEqual(config["github"]["diff_branch"], "main")
 
     def test_openai_backend_params_truncation_and_retry(self):
         calls = []

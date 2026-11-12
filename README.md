@@ -138,7 +138,7 @@ uv run python stages/package.py
 | `PATHS_SERVER_CACHE` / `PATHS_MOD_CACHE` / `PATHS_NIGHTLY_MOD_CACHE` / `PATHS_GKM_DIFF` / `PATHS_OUTPUT` | `paths.*` | 各子缓存与产物输出路径 |
 | `GITHUB_OWNER` / `GITHUB_REPO` | `github.owner` / `repo` | 上游汉化模版仓库（默认 `chinosk6/GakumasTranslationData`） |
 | `GITHUB_USE_NIGHTLY` / `GITHUB_NIGHTLY_URL` | `github.use_nightly` / `nightly_url` | Nightly 补充包开关与下载地址 |
-| `GITHUB_DIFF_OWNER` / `GITHUB_DIFF_REPO` / `GITHUB_DIFF_BRANCH` | `github.diff_*` | Master YAML 差分仓库与分支（默认 `vertesan/gakumasu-diff@master`） |
+| `GITHUB_DIFF_OWNER` / `GITHUB_DIFF_REPO` / `GITHUB_DIFF_BRANCH` | `github.diff_*` | Master YAML 差分仓库与分支（默认 `vertesan/gakumasu-diff@main`） |
 | `GITHUB_TOKEN` / `GH_TOKEN` | — | GitHub API 认证 Token（提升配额避免匿名 403 限流） |
 | `OCTO_*` (`APP_ID`, `CLIENT_SECRET`, `VERSION`, `URL`, `API_KEY_SEED`, `CACHE_KEY`, `CACHE_IV`, `DATA_PATH`, `VERIFY_SSL`) | `octo.*` | Octo 资源服接入参数与证书校验开关 |
 | `PREVIOUS_OCTO_REVISION` / `PREVIOUS_MOD_VERSION` / `PREVIOUS_DIFF_SHA` | — | CI 上次完成构建的三源指纹 |

@@ -213,7 +213,7 @@ def run(config: dict | None = None, paths: dict[str, Path] | None = None) -> boo
     )
     diff_owner = github_cfg.get("diff_owner", "vertesan")
     diff_repo = github_cfg.get("diff_repo", "gakumasu-diff")
-    diff_branch = github_cfg.get("diff_branch", "master")
+    diff_branch = github_cfg.get("diff_branch", "main")
 
     print("[1/4] Checking Octo manifest...", flush=True)
     client = OctoClient(cfg.get("octo", {}))

@@ -36,7 +36,7 @@ GITHUB_DEFAULTS = {
     "nightly_url": "https://github.com/huochai67/gkm_tl/releases/download/nightly/GakumasTranslationData.zip",
     "diff_owner": "vertesan",
     "diff_repo": "gakumasu-diff",
-    "diff_branch": "master",
+    "diff_branch": "main",
 }
 
 OCTO_DEFAULTS = {
