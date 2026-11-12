@@ -4,21 +4,20 @@ llm:
   model: "gpt-4o-mini"
   max_tokens: 4096
   batch_size: 20
+  # Adaptive per-batch source character ceiling to prevent max_tokens truncation.
+  max_batch_chars: 6000
   max_concurrent: 5
+  max_retries: 3
   timeout: 180
-  # Low temperature keeps batch output deterministic. Backends that reject the
-  # field ignore it; max_tokens is always sent.
+  # Low temperature keeps batch output deterministic. Omitted when reasoning_effort is set.
   temperature: 0.2
   # OpenAI-compatible reasoning effort: none, minimal, low, medium, or high.
-  # Omit it to use the model/provider default.
   reasoning_effort: null
-  # Every request always carries response_format json_schema
-  # ({"translations":[{"id","translation"}]}); the provider must support OpenAI
-  # structured outputs.
   # Set false to retranslate entries whose source Japanese changed.
   skip_changed: true
 
 paths:
+  cache_dir: cache
   server_cache: cache/server
   mod_cache: cache/mod
   nightly_mod_cache: cache/nightly
@@ -28,8 +27,12 @@ paths:
 github:
   owner: chinosk6
   repo: GakumasTranslationData
-  # Set false to skip downloading and extracting the nightly package.
+  # Set false to skip downloading and merging the nightly fallback package.
   use_nightly: true
+  nightly_url: "https://github.com/huochai67/gkm_tl/releases/download/nightly/GakumasTranslationData.zip"
+  diff_owner: vertesan
+  diff_repo: gakumasu-diff
+  diff_branch: master
 
 character_names:
   amao: 有村麻央
@@ -37,14 +40,19 @@ character_names:
   hume: 花海佑芽
   fktn: 藤田琴音
   kllj: 葛城莉莉娅
-  hrnm: 姫崎莉波
-  shro: 広
-  ssmk: 紫雲清夏
+  hrnm: 姬崎莉波
+  shro: 筱泽广
+  ssmk: 紫云清夏
   ttmr: 月村手毬
-  kcna: 倉本千奈
-  hmsz: 秦谷美鈴
+  kcna: 仓本千奈
+  hmsz: 秦谷美铃
   atbm: 雨夜燕
   jsna: 十王星南
+  nasr: 根绪亚纱里
+  krnh: 贺阳燐羽
+  trvo: Vo训练员
+  trda: Da训练员
+  trvi: Vi训练员
   cmmn: ""
   "{user}": "{user}"
 
@@ -58,3 +66,4 @@ octo:
   cache_key: 9d8dfd7b1371612846f7ba44e01af160
   cache_iv: 1c6e6f9255c0e5412712f4010225e378
   data_path: cache/octo
+  verify_ssl: true

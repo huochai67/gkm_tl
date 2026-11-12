@@ -29,24 +29,40 @@ jobs:
           enable-cache: true
           python-version: "3.12"
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - name: Install dependencies
         run: uv sync --frozen
 
       - name: Run regression tests
         run: uv run python -m unittest discover -s tests
 
+      - name: Restore incremental translation state
+        uses: actions/cache@v4
+        with:
+          path: |
+            cache/master_source_snapshot.json
+            cache/translated.json
+            cache/translate_checkpoint.jsonl
+          key: gkm-tl-state-${{ github.run_id }}
+          restore-keys: |
+            gkm-tl-state-
+
       - name: Build nightly package
         id: build
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          prev_rev="$(gh release view nightly --json body -q '.body' 2>/dev/null | sed -n 's/^Octo Revision:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1 || true)"
+          notes="$(gh release view nightly --json body -q '.body' 2>/dev/null || true)"
+          prev_rev="$(printf '%s\n' "$notes" | sed -n 's/^Octo Revision:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)"
+          prev_mod="$(printf '%s\n' "$notes" | sed -n 's/^Upstream Version:[[:space:]]*\([^[:space:]]*\).*/\1/p' | head -n 1)"
+          prev_diff="$(printf '%s\n' "$notes" | sed -n 's/^Master Diff SHA:[[:space:]]*\([0-9a-fA-F]*\).*/\1/p' | head -n 1)"
           if [ -n "$prev_rev" ]; then
             export PREVIOUS_OCTO_REVISION="$prev_rev"
+          fi
+          if [ -n "$prev_mod" ]; then
+            export PREVIOUS_MOD_VERSION="$prev_mod"
+          fi
+          if [ -n "$prev_diff" ]; then
+            export PREVIOUS_DIFF_SHA="$prev_diff"
           fi
           export BUILD_VERSION="nightly-$(date +%F)"
           uv run python run.py
@@ -55,16 +71,23 @@ jobs:
           else
             echo "has_new=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Validate built ADV scripts
+        if: steps.build.outputs.has_new == 'true'
+        run: uv run python tools/check_txt.py output/GakumasTranslationData/local-files/resource
+
       - name: Generate release notes
         if: steps.build.outputs.has_new == 'true'
         run: |
           upstream_version="$(tr -d '\r\n' < cache/mod/version.txt)"
           octo_revision="$(uv run python -c 'import json; print(json.load(open("cache/server/octo_index.json", encoding="utf-8"))["revision"])')"
+          diff_sha="$(cat cache/gkm-diff/.commit_sha 2>/dev/null | tr -d '\r\n' || echo 'unknown')"
           build_time="$(date '+%Y-%m-%d %H:%M:%S %Z')"
           package_sha256="$(sha256sum output/GakumasTranslationData.zip | cut -d ' ' -f 1)"
           cat > release-notes.md <<EOF
           Upstream Version: $upstream_version
           Octo Revision: $octo_revision
+          Master Diff SHA: $diff_sha
           Built at: $build_time
           SHA-256: $package_sha256
           EOF

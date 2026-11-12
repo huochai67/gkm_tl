@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from lib.config import load_config, resolve_paths
+from lib.config import get_cache_dir, load_config, resolve_paths
 
 
 def _parse_args() -> argparse.Namespace:
@@ -33,7 +33,7 @@ def export_items(extract: list[dict], status: str, output: Path) -> int:
 
 def main():
     config = load_config()
-    cache_dir = resolve_paths(config)["server_cache"].parent
+    cache_dir = get_cache_dir(resolve_paths(config))
     args = _parse_args()
 
     extract_path = cache_dir / "extract.json"

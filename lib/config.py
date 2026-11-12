@@ -2,6 +2,8 @@ import os
 from pathlib import Path
 import yaml
 
+from lib.characters import CHARACTER_NAMES_DEFAULTS
+
 PROJECT_ROOT = Path(__file__).parent.parent
 DEFAULT_CONFIG = str(PROJECT_ROOT / "config.yaml")
 EXAMPLE_CONFIG = PROJECT_ROOT / "config.yaml.example"
@@ -9,7 +11,9 @@ EXAMPLE_CONFIG = PROJECT_ROOT / "config.yaml.example"
 LLM_DEFAULTS = {
     "max_tokens": 4096,
     "batch_size": 20,
+    "max_batch_chars": 6000,
     "max_concurrent": 5,
+    "max_retries": 3,
     "timeout": 180,
     "temperature": 0.2,
     "reasoning_effort": None,
@@ -17,6 +21,7 @@ LLM_DEFAULTS = {
 }
 
 PATHS_DEFAULTS = {
+    "cache_dir": "cache",
     "server_cache": "cache/server",
     "mod_cache": "cache/mod",
     "nightly_mod_cache": "cache/nightly",
@@ -28,24 +33,10 @@ GITHUB_DEFAULTS = {
     "owner": "chinosk6",
     "repo": "GakumasTranslationData",
     "use_nightly": True,
-}
-
-CHARACTER_NAMES_DEFAULTS = {
-    "amao": "有村麻央",
-    "hski": "花海咲季",
-    "hume": "花海佑芽",
-    "fktn": "藤田琴音",
-    "kllj": "葛城莉莉娅",
-    "hrnm": "姫崎莉波",
-    "shro": "広",
-    "ssmk": "紫雲清夏",
-    "ttmr": "月村手毬",
-    "kcna": "倉本千奈",
-    "hmsz": "秦谷美鈴",
-    "atbm": "雨夜燕",
-    "jsna": "十王星南",
-    "cmmn": "",
-    "{user}": "{user}",
+    "nightly_url": "https://github.com/huochai67/gkm_tl/releases/download/nightly/GakumasTranslationData.zip",
+    "diff_owner": "vertesan",
+    "diff_repo": "gakumasu-diff",
+    "diff_branch": "master",
 }
 
 OCTO_DEFAULTS = {
@@ -57,8 +48,8 @@ OCTO_DEFAULTS = {
     "cache_key": "9d8dfd7b1371612846f7ba44e01af160",
     "cache_iv": "1c6e6f9255c0e5412712f4010225e378",
     "data_path": "cache/octo",
+    "verify_ssl": True,
 }
-
 
 def _parse_bool(value: str) -> bool:
     normalized = value.strip().lower()
@@ -86,7 +77,9 @@ _ENV_TO_LLM = {
     "LLM_MODEL": ("model", str),
     "LLM_MAX_TOKENS": ("max_tokens", int),
     "LLM_BATCH_SIZE": ("batch_size", int),
+    "LLM_MAX_BATCH_CHARS": ("max_batch_chars", int),
     "LLM_MAX_CONCURRENT": ("max_concurrent", int),
+    "LLM_MAX_RETRIES": ("max_retries", int),
     "LLM_TIMEOUT": ("timeout", int),
     "LLM_TEMPERATURE": ("temperature", float),
     "LLM_REASONING_EFFORT": ("reasoning_effort", _parse_reasoning_effort),
@@ -94,6 +87,7 @@ _ENV_TO_LLM = {
 }
 
 _ENV_TO_PATHS = {
+    "PATHS_CACHE_DIR": ("cache_dir", str),
     "PATHS_SERVER_CACHE": ("server_cache", str),
     "PATHS_MOD_CACHE": ("mod_cache", str),
     "PATHS_NIGHTLY_MOD_CACHE": ("nightly_mod_cache", str),
@@ -105,6 +99,10 @@ _ENV_TO_GITHUB = {
     "GITHUB_OWNER": ("owner", str),
     "GITHUB_REPO": ("repo", str),
     "GITHUB_USE_NIGHTLY": ("use_nightly", _parse_bool),
+    "GITHUB_NIGHTLY_URL": ("nightly_url", str),
+    "GITHUB_DIFF_OWNER": ("diff_owner", str),
+    "GITHUB_DIFF_REPO": ("diff_repo", str),
+    "GITHUB_DIFF_BRANCH": ("diff_branch", str),
 }
 
 _ENV_TO_OCTO = {
@@ -116,8 +114,8 @@ _ENV_TO_OCTO = {
     "OCTO_CACHE_KEY": ("cache_key", str),
     "OCTO_CACHE_IV": ("cache_iv", str),
     "OCTO_DATA_PATH": ("data_path", str),
+    "OCTO_VERIFY_SSL": ("verify_ssl", _parse_bool),
 }
-
 _YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 
@@ -150,7 +148,6 @@ def load_config(path: str | None = None) -> dict:
     char_names = dict(CHARACTER_NAMES_DEFAULTS)
     char_names.update(cfg.get("character_names") or {})
     cfg["character_names"] = char_names
-    cfg["char_map"] = dict(char_names)
 
     llm = cfg.get("llm") or {}
     cfg["llm"] = llm
@@ -161,9 +158,10 @@ def load_config(path: str | None = None) -> dict:
     paths = cfg.get("paths") or {}
     cfg["paths"] = paths
     _apply_env_overrides(paths, _ENV_TO_PATHS)
+    if "cache_dir" not in paths and "server_cache" in paths:
+        paths["cache_dir"] = str(Path(paths["server_cache"]).parent)
     for key, default in PATHS_DEFAULTS.items():
         paths.setdefault(key, default)
-
     github = cfg.get("github") or {}
     cfg["github"] = github
     _apply_env_overrides(github, _ENV_TO_GITHUB)
@@ -182,12 +180,21 @@ def load_config(path: str | None = None) -> dict:
 def resolve_paths(config: dict) -> dict[str, Path]:
     """Resolve configured runtime paths relative to the project root."""
     configured = config.get("paths", {})
-    paths = {}
+    paths: dict[str, Path] = {}
     for key, default in PATHS_DEFAULTS.items():
-        value = Path(configured.get(key, default))
-        paths[key] = value if value.is_absolute() else PROJECT_ROOT / value
+        if key == "cache_dir" and "cache_dir" not in configured and "server_cache" in configured:
+            raw = Path(configured["server_cache"]).parent
+        else:
+            raw = Path(configured.get(key, default))
+        paths[key] = raw if raw.is_absolute() else PROJECT_ROOT / raw
     return paths
 
+
+def get_cache_dir(paths: dict[str, Path]) -> Path:
+    """Return explicit cache_dir from a resolved paths mapping."""
+    if "cache_dir" in paths:
+        return paths["cache_dir"]
+    return paths["server_cache"].parent
 
 def validate_llm_config(config: dict) -> None:
     """Raise a clear error before a translation request lacks connection settings."""

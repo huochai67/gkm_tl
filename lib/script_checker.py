@@ -16,32 +16,10 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from lib.characters import ACTOR_NAMES
 from lib.text_utils import contains_japanese, looks_like_japanese_source
 
 # ── Actor & Command Schema Registry (Campus.ADV / Uguiss) ────────────────────
-
-ACTOR_NAMES: dict[str, dict[str, str]] = {
-    "amao": {"ja": "有村 麻央", "zh": "有村 麻央"},
-    "hski": {"ja": "花海 咲季", "zh": "花海 咲季"},
-    "ttmr": {"ja": "月村 手毬", "zh": "月村 手毬"},
-    "fktn": {"ja": "藤田 ことね", "zh": "藤田 琴音"},
-    "hmsz": {"ja": "秦谷 美鈴", "zh": "秦谷 美铃"},
-    "ssmk": {"ja": "紫雲 清夏", "zh": "紫云 清夏"},
-    "kcna": {"ja": "倉本 千奈", "zh": "仓本 千奈"},
-    "kllj": {"ja": "葛城 リーリヤ", "zh": "葛城 莉莉娅"},
-    "shro": {"ja": "篠澤 広", "zh": "筱泽 广"},
-    "hrnm": {"ja": "姫崎 莉波", "zh": "姬崎 莉波"},
-    "hume": {"ja": "花海 佑芽", "zh": "花海 佑芽"},
-    "jsna": {"ja": "十王 星南", "zh": "十王 星南"},
-    "nasr": {"ja": "根緒 亜紗里", "zh": "根绪 亚纱里"},
-    "atbm": {"ja": "雨夜 燕", "zh": "雨夜 燕"},
-    "trvo": {"ja": "Vo トレーナー", "zh": "Vo 训练员"},
-    "trda": {"ja": "Da トレーナー", "zh": "Da 训练员"},
-    "trvi": {"ja": "Vi トレーナー", "zh": "Vi 训练员"},
-    "krnh": {"ja": "賀陽 燐羽", "zh": "贺阳 燐羽"},
-    "cmmn": {"ja": "共通", "zh": "通用"},
-}
-
 # All 88 top-level Campus.ADV.*Command types and their legal parameter keys.
 TOP_LEVEL_COMMANDS: dict[str, set[str]] = {
     "actoradditivemotion": {"clip", "id", "motion"},
@@ -392,7 +370,9 @@ def _scan_bare(s: str, i: int) -> tuple[str, int]:
     return s[i:], len(s)
 
 
-def _convert_value(raw: str, kind: str, line_no: int = 0) -> tuple[Any, str | None]:
+def _convert_value(
+    raw: str, kind: str, line_no: int = 0, *, raw_offset: int = 0
+) -> tuple[Any, str | None]:
     """Convert raw token into typed Python value (`dict`, `list`, `bool`, `int`/`float`, `str`)."""
     if kind == "json":
         unescaped = _RE_UNESCAPE_JSON.sub("", raw)
@@ -407,30 +387,49 @@ def _convert_value(raw: str, kind: str, line_no: int = 0) -> tuple[Any, str | No
         return parsed, None
 
     if kind == "nested":
-        body = raw[1:-1].strip() if (raw.startswith("[") and raw.endswith("]")) else raw.strip()
+        has_outer = raw.startswith("[") and raw.endswith("]")
+        inner_raw = raw[1:-1] if has_outer else raw
+        inner_base = raw_offset + (1 if raw.startswith("[") else 0)
+        body = inner_raw.strip()
         if not body:
             return [], "嵌套指令列表为空 []"
         if not body.startswith("["):
-            return [parse_command("[" + body + "]", line_no=line_no, is_nested=True)], None
+            if raw.startswith("["):
+                return [
+                    parse_command(raw, line_no=line_no, is_nested=True, base_offset=raw_offset)
+                ], None
+            lead = len(inner_raw) - len(inner_raw.lstrip())
+            return [
+                parse_command(
+                    "[" + body + "]",
+                    line_no=line_no,
+                    is_nested=True,
+                    base_offset=inner_base + lead - 1,
+                )
+            ], None
         out = []
         idx = 0
-        n = len(body)
+        n = len(inner_raw)
         while idx < n:
-            while idx < n and body[idx].isspace():
+            while idx < n and inner_raw[idx].isspace():
                 idx += 1
             if idx >= n:
                 break
-            if body[idx] == "[":
-                sub_raw, idx, closed = _scan_bracketed_list(body, idx)
+            if inner_raw[idx] == "[":
+                sub_start = idx
+                sub_raw, idx, closed = _scan_bracketed_list(inner_raw, sub_start)
+                cmd_obj = parse_command(
+                    sub_raw,
+                    line_no=line_no,
+                    is_nested=True,
+                    base_offset=inner_base + sub_start,
+                )
+                out.append(cmd_obj)
                 if not closed:
-                    cmd_obj = parse_command(sub_raw, line_no=line_no, is_nested=True)
-                    out.append(cmd_obj)
                     return out, f"嵌套指令括号未闭合: {sub_raw[:40]}"
-                out.append(parse_command(sub_raw, line_no=line_no, is_nested=True))
             else:
-                return out, f"嵌套指令列表中存在非法字符: {body[idx:idx+30]}"
+                return out, f"嵌套指令列表中存在非法字符: {inner_raw[idx:idx+30]}"
         return out, None
-
     stripped = raw.strip()
     if stripped == "true":
         return True, None
@@ -448,8 +447,15 @@ def _convert_value(raw: str, kind: str, line_no: int = 0) -> tuple[Any, str | No
     return raw, None
 
 
-def parse_command(raw_line: str, line_no: int = 0, *, is_nested: bool = False) -> dict[str, Any]:
-    """Parse one `[type key=value ...]` command (ported from `adv.js:parseCommand`)."""
+def parse_command(
+    raw_line: str,
+    line_no: int = 0,
+    *,
+    is_nested: bool = False,
+    base_offset: int = 0,
+) -> dict[str, Any]:
+    """Parse one `[type key=value ...]` command with exact character spans."""
+    lead_ws = len(raw_line) - len(raw_line.lstrip())
     s = raw_line.strip()
     syntax_errors: list[tuple[str, str, str]] = []  # (code, field, message)
 
@@ -460,6 +466,7 @@ def parse_command(raw_line: str, line_no: int = 0, *, is_nested: bool = False) -
             ("unbracketed_line", "", "指令行必须以 '[' 开头且以 ']' 结尾")
         )
     inner = s[1 if has_open else 0 : -1 if (has_close and len(s) > 1) else len(s)]
+    inner_base = base_offset + lead_ws + (1 if has_open else 0)
     m = _RE_CMD_HEAD.match(inner)
     if not m:
         return {
@@ -468,6 +475,8 @@ def parse_command(raw_line: str, line_no: int = 0, *, is_nested: bool = False) -
             "all": {},
             "raw_params": {},
             "raw_all": {},
+            "spans": {},
+            "spans_all": {},
             "kind_all": {},
             "line": line_no,
             "raw": raw_line,
@@ -483,6 +492,8 @@ def parse_command(raw_line: str, line_no: int = 0, *, is_nested: bool = False) -
     all_params: dict[str, list[Any]] = {}
     raw_params: dict[str, str] = {}
     raw_all: dict[str, list[str]] = {}
+    spans: dict[str, tuple[int, int]] = {}
+    spans_all: dict[str, list[tuple[int, int]]] = {}
     kind_all: dict[str, list[str]] = {}
 
     while i < n:
@@ -504,6 +515,7 @@ def parse_command(raw_line: str, line_no: int = 0, *, is_nested: bool = False) -
 
         key = km.group(1)
         i = km.end()
+        val_start = i
 
         if inner.startswith(r"\{", i):
             raw_val, i, closed = _scan_escaped_json(inner, i)
@@ -535,7 +547,10 @@ def parse_command(raw_line: str, line_no: int = 0, *, is_nested: bool = False) -
             raw_val, i = _scan_bare(inner, i)
             kind = "bare"
 
-        val, conv_err = _convert_value(raw_val, kind, line_no=line_no)
+        span = (inner_base + val_start, inner_base + i)
+        val, conv_err = _convert_value(
+            raw_val, kind, line_no=line_no, raw_offset=span[0]
+        )
         if conv_err:
             err_code = "invalid_json" if kind == "json" else "unclosed_bracket"
             syntax_errors.append((err_code, key, f"参数 {key} {conv_err}"))
@@ -544,6 +559,8 @@ def parse_command(raw_line: str, line_no: int = 0, *, is_nested: bool = False) -
         all_params.setdefault(key, []).append(val)
         raw_params[key] = raw_val
         raw_all.setdefault(key, []).append(raw_val)
+        spans[key] = span
+        spans_all.setdefault(key, []).append(span)
         kind_all.setdefault(key, []).append(kind)
 
     return {
@@ -552,6 +569,8 @@ def parse_command(raw_line: str, line_no: int = 0, *, is_nested: bool = False) -
         "all": all_params,
         "raw_params": raw_params,
         "raw_all": raw_all,
+        "spans": spans,
+        "spans_all": spans_all,
         "kind_all": kind_all,
         "line": line_no,
         "raw": raw_line,

@@ -1,151 +1,177 @@
+"""Unified ADV resource script parser, translation wrapper codecs, and AST line builder."""
+
+from __future__ import annotations
+
 import re
 from pathlib import Path
 
+from lib.characters import CHAR_KEYS
+from lib.script_checker import (
+    normalize_resource_source,
+    parse_command,
+    resource_sources_equal,
+    split_translation_segments,
+)
+from lib.text_utils import looks_like_japanese_source
+
 TEXT_COMMANDS = {"message", "narration", "title", "choicegroup"}
-CHAR_KEYS = {"amao", "hski", "hume", "fktn", "kllj", "hrnm", "shro", "ssmk", "ttmr", "kcna", "hmsz", "atbm", "jsna", "cmmn"}
+
+# Fallback choice extractor used only on legacy corrupted upstream mod lines
+# that contain an unescaped `]` inside `<r\=...]>`.
+_RE_LEGACY_CHOICE_TEXT = re.compile(
+    r"text=(.*?)(?=\](?=\s+[a-zA-Z_]\w*=|$)|(?:\s+(?:text=|[a-zA-Z_]\w*=)|$))"
+)
+_RE_UNESCAPED_EQ = re.compile(r"(?<!\\)=")
 
 
-def parse_adv_context(stem: str) -> dict:
+def parse_adv_context(stem: str) -> dict[str, str]:
     name = stem[4:] if stem.startswith("adv_") else stem
     ctx = {"story_type": name, "character": "", "chapter": ""}
     parts = re.split(r"[-_]", name)
     found = ""
-    for p in parts:
-        if p in CHAR_KEYS:
-            found = p
-            ctx["character"] = p
+    for part in parts:
+        if part in CHAR_KEYS:
+            found = part
+            ctx["character"] = part
             break
     if found:
         idx = name.find(found)
         pre = name[:idx].rstrip("_-")
-        post = name[idx + len(found):].lstrip("_-")
+        post = name[idx + len(found) :].lstrip("_-")
         if pre:
             ctx["story_type"] = pre
         ctx["chapter"] = post
     return ctx
 
-_RE_KV_KEY = re.compile(r"\s*([A-Za-z_][\w-]*)=")
-_RE_NEXT_KEY = re.compile(r"[ \t]+[A-Za-z_][\w-]*=|(?<!\\)=")
-_RE_ESC_BRACE = re.compile(r'\\.|"')
+
+def split_resource_translation(value: str) -> tuple[str, str]:
+    """Return `(source_jp, existing_cn)` from a mod `<r\\=JP>CN</r>` text value."""
+    segments, complete = split_translation_segments(value)
+    if not complete or not segments:
+        return value, ""
+    if len(segments) == 1:
+        return segments[0]
+    old_jp = r"\n".join(jp for jp, _ in segments)
+    existing_cn = r"\n".join(cn for _, cn in segments)
+    return old_jp, existing_cn
 
 
-def _extract_all_kv(body: str) -> dict[str, str]:
-    result = {}
-    i = 0
-    n = len(body)
-    while i < n:
-        m = _RE_KV_KEY.match(body, i)
-        if not m:
-            nxt = _RE_KV_KEY.search(body, i)
-            if not nxt:
-                break
-            m = nxt
-        key = m.group(1)
-        i = m.end()
-        if i >= n:
-            break
-        if body.startswith(r"\{", i):
-            depth = 0
-            in_str = False
-            end_j = n
-            for bm in _RE_ESC_BRACE.finditer(body, i):
-                tok = bm.group(0)
-                if tok == r'\"':
-                    in_str = not in_str
-                elif not in_str:
-                    if tok == r"\{":
-                        depth += 1
-                    elif tok == r"\}":
-                        depth -= 1
-                        if depth == 0:
-                            end_j = bm.end()
-                            break
-            result[key] = body[i:end_j]
-            i = end_j
-        elif body[i] == "{" and key not in ("text", "title", "name", "voice"):
-            depth = 1
-            j = i + 1
-            while j < n and depth > 0:
-                if body[j] == "{":
-                    depth += 1
-                elif body[j] == "}":
-                    depth -= 1
-                j += 1
-            result[key] = body[i:j]
-            i = j
-        elif body[i] == "[":
-            depth = 1
-            j = i + 1
-            while j < n and depth > 0:
-                if body[j] == "[":
-                    depth += 1
-                elif body[j] == "]":
-                    depth -= 1
-                j += 1
-            result[key] = body[i:j]
-            i = j
-        else:
-            nm = _RE_NEXT_KEY.search(body, i)
-            if nm:
-                if nm.group(0) == "=":
-                    k = nm.start()
-                    while k > i and (body[k - 1].isalnum() or body[k - 1] in ("_", "-")):
-                        k -= 1
-                    j = k if k > i else nm.start()
-                else:
-                    j = nm.start()
-            else:
-                j = n
-            result[key] = body[i:j]
-            i = j
-    return result
+def is_plain_resource_field(field: str) -> bool:
+    r"""Fields the upstream mod stores without the `<r\=JP>CN</r>` wrapper."""
+    return field == "name" or field.startswith("text[")
 
-# Choice text ends at the next key, or at the ] that closes nested [choice ...].
-_RE_CHOICE_TEXT = re.compile(
-    r"text=(.*?)(?=\](?=\s+[a-zA-Z_]\w*=|$)|(?:\s+(?:text=|[a-zA-Z_]\w*=)|$))"
-)
+
+def get_existing_resource_translation(
+    field: str, mod_value: str, current_jp: str
+) -> tuple[str, str]:
+    """Read either `<r\\=JP>CN</r>` wrapped text or the mod's plain-Chinese value."""
+    if field.startswith("text[") and mod_value.startswith(r"<r\="):
+        mod_value = mod_value.replace("]>", ">", 1)
+    old_jp, existing_cn = split_resource_translation(mod_value)
+    if (
+        is_plain_resource_field(field)
+        and old_jp
+        and not existing_cn
+        and (old_jp != current_jp or not looks_like_japanese_source(old_jp))
+    ):
+        return current_jp, old_jp
+    return old_jp, existing_cn
+
+
+def _collect_choice_entries(ev: dict, raw_line: str) -> list[tuple[tuple[int, int] | None, str]]:
+    """Return `(span_in_raw_line, raw_text)` for each choice in left-to-right order."""
+    if ev.get("syntax_errors"):
+        # Recover legacy broken mod choice lines (e.g. stray `]>` inside wrapper).
+        s = raw_line.strip()
+        head = re.match(r"\[\w+\s+", s)
+        body_end = s.rfind("]")
+        if head and body_end > head.end():
+            body = s[head.end() : body_end]
+            return [(None, m.group(1)) for m in _RE_LEGACY_CHOICE_TEXT.finditer(body)]
+
+    entries: list[tuple[tuple[int, int], str]] = []
+    for text_span, text_raw in zip(
+        ev["spans_all"].get("text", []), ev["raw_all"].get("text", [])
+    ):
+        entries.append((text_span, text_raw))
+
+    for group in ev["all"].get("choices", []):
+        if not isinstance(group, list):
+            continue
+        for sub in group:
+            if not isinstance(sub, dict) or sub.get("type") != "choice":
+                continue
+            for text_span, text_raw in zip(
+                sub["spans_all"].get("text", []), sub["raw_all"].get("text", [])
+            ):
+                entries.append((text_span, text_raw))
+
+    entries.sort(key=lambda pair: pair[0][0])
+    return entries
+
 
 def extract_resource_text(filepath: Path) -> list[dict]:
+    """Extract translatable fields from an ADV `.txt` script using the unified parser."""
     text = filepath.read_text(encoding="utf-8")
-    results = []
-    for line_no, line in enumerate(text.split("\n"), 1):
-        line = line.strip()
-        if not line or not line.startswith("["): continue
-        cmd_m = re.match(r"\[(\w+)\s", line)
-        if not cmd_m: continue
-        cmd = cmd_m.group(1)
-        body_end = line.rfind("]")
-        if body_end < 0: continue
-        body = line[cmd_m.end():body_end]
-        kv = _extract_all_kv(body)
+    return extract_resource_text_from_str(text)
+
+
+def extract_resource_text_from_str(text: str) -> list[dict]:
+    results: list[dict] = []
+    for line_no, raw_line in enumerate(text.split("\n"), 1):
+        stripped = raw_line.strip()
+        if not stripped or not stripped.startswith("["):
+            continue
+        ev = parse_command(raw_line, line_no=line_no)
+        cmd = ev["type"]
+        if not cmd:
+            continue
 
         if cmd in ("message", "narration", "title"):
-            # title commands carry their source text in title=, all others in text=.
-            # Both are exposed under the shared field="text" contract.
             src_field = "title" if cmd == "title" else "text"
-            if src_field in kv:
-                results.append({"line": line_no, "command": cmd, "field": "text", "jp": kv[src_field]})
-            if "name" in kv and cmd == "message":
-                results.append({"line": line_no, "command": cmd, "field": "name", "jp": kv["name"]})
+            if src_field in ev["raw_params"]:
+                results.append(
+                    {
+                        "line": line_no,
+                        "command": cmd,
+                        "field": "text",
+                        "jp": ev["raw_params"][src_field],
+                    }
+                )
+            if cmd == "message" and "name" in ev["raw_params"]:
+                results.append(
+                    {
+                        "line": line_no,
+                        "command": cmd,
+                        "field": "name",
+                        "jp": ev["raw_params"]["name"],
+                    }
+                )
         elif cmd == "choicegroup":
-            choices = _RE_CHOICE_TEXT.findall(body)
-            for ci, ct in enumerate(choices):
-                results.append({"line": line_no, "command": "choice", "field": f"text[{ci}]", "jp": ct})
+            for ci, (_, choice_text) in enumerate(_collect_choice_entries(ev, raw_line)):
+                results.append(
+                    {
+                        "line": line_no,
+                        "command": "choice",
+                        "field": f"text[{ci}]",
+                        "jp": choice_text,
+                    }
+                )
     return results
 
 
 def _normalize_resource_translation(cn: str) -> str:
-    """Make LLM output safe for a one-line resource command."""
-    # Some responses absorb the required batch separator into the last item.
+    """Make LLM output safe for a one-line Campus.ADV / Uguiss resource command."""
     cn = re.sub(r"(?:\r?\n|\\r\\n|\\n)+---\s*$", "", cn)
     cn = cn.replace("\r\n", r"\n").replace("\r", r"\n").replace("\n", r"\n")
-    # Preserve the game's ruby-tag syntax when the model reproduces it.
-    cn = cn.replace("<r=", r"<r\=").replace(r"</r\>", "</r>")
+    cn = cn.replace("<r=", r"<r\=").replace("<em=", r"<em\=").replace(r"</r\>", "</r>")
+    # Escape any remaining bare `=` so Uguiss never splits a text token.
+    cn = _RE_UNESCAPED_EQ.sub(r"\\=", cn)
     return cn
 
 
 def wrap_resource_translation(jp: str, cn: str) -> str:
-    """Wrap JP/CN into mod format; multi-line (literal \\n) becomes multi-segment."""
+    """Wrap JP/CN into mod `<r\\=JP>CN</r>` format; literal `\\n` becomes multi-segment."""
     cn = _normalize_resource_translation(cn)
     jp_parts = jp.split(r"\n")
     cn_parts = cn.split(r"\n")
@@ -154,61 +180,80 @@ def wrap_resource_translation(jp: str, cn: str) -> str:
     return f"<r\\={jp}>{cn}</r>"
 
 
-def _replace_choice_texts(body: str, translations: dict[int, str]) -> str:
-    """Replace indexed choicegroup text with plain Chinese, matching the upstream mod."""
-    index = 0
-
-    def replace(match: re.Match) -> str:
-        nonlocal index
-        cn = translations.get(index)
-        index += 1
-        return f"text={_normalize_resource_translation(cn)}" if cn else match.group(0)
-
-    return _RE_CHOICE_TEXT.sub(replace, body)
-
-
 def build_resource_line(orig_line: str, translations: dict[str, str]) -> str:
-    cmd_m = re.match(r"(\[\w+\s+)(.*)(\])", orig_line.strip())
-    if not cmd_m: return orig_line
-    prefix, body, suffix = cmd_m.group(1), cmd_m.group(2), cmd_m.group(3)
-    cmd = re.match(r"\[(\w+)", prefix).group(1)
-    # title commands store their source text in title=, everything else in text=.
-    src_field = "title" if cmd == "title" else "text"
-    kv = _extract_all_kv(body)
+    """Splice translations into `orig_line` by exact AST parameter spans."""
+    stripped = orig_line.strip()
+    if not stripped.startswith("[") or not stripped.endswith("]"):
+        return orig_line
 
-    indexed = {}
-    plain = {}
-    for field, cn in translations.items():
-        m = re.match(r"text\[(\d+)\]$", field)
-        if m:
-            indexed[int(m.group(1))] = cn
-        else:
-            plain[field] = cn
+    ev = parse_command(orig_line)
+    cmd = ev["type"]
+    if not cmd:
+        return orig_line
 
-    if indexed:
-        body = _replace_choice_texts(body, indexed)
+    trailing_newline = orig_line[len(orig_line.rstrip("\r\n")) :]
+    work_line = orig_line[: len(orig_line) - len(trailing_newline)] if trailing_newline else orig_line
+    if trailing_newline:
+        ev = parse_command(work_line)
 
-    for field, cn in plain.items():
-        if field == "text" and cn:
-            jp = kv.get(src_field, "")
-            # A line without the matching source field is left untouched
-            # instead of gaining an empty replacement field.
-            if not jp:
-                continue
-            old = f"{src_field}={jp}"
-            new = f"{src_field}={wrap_resource_translation(jp, cn)}"
-            body = body.replace(old, new, 1)
-        elif field == "name" and cn:
-            old = f"name={kv.get('name', '')}"
-            new = f"name={cn}"
-            body = body.replace(old, new, 1)
-    return prefix + body + suffix
+    replacements: list[tuple[int, int, str]] = []
+
+    if cmd == "choicegroup":
+        indexed: dict[int, str] = {}
+        for field, cn in translations.items():
+            m = re.match(r"text\[(\d+)\]$", field)
+            if m and cn:
+                indexed[int(m.group(1))] = cn
+        if indexed:
+            choices = _collect_choice_entries(ev, work_line)
+            for idx, (span, _) in enumerate(choices):
+                cn = indexed.get(idx)
+                if cn and span is not None:
+                    replacements.append((span[0], span[1], _normalize_resource_translation(cn)))
+    elif cmd in ("message", "narration", "title"):
+        src_field = "title" if cmd == "title" else "text"
+        cn_text = translations.get("text", "")
+        if cn_text and src_field in ev["spans"] and ev["raw_params"].get(src_field):
+            jp = ev["raw_params"][src_field]
+            span = ev["spans"][src_field]
+            replacements.append((span[0], span[1], wrap_resource_translation(jp, cn_text)))
+        if cmd == "message":
+            cn_name = translations.get("name", "")
+            if cn_name and "name" in ev["spans"]:
+                span = ev["spans"]["name"]
+                replacements.append((span[0], span[1], cn_name))
+
+    if not replacements:
+        return orig_line
+
+    replacements.sort(key=lambda item: item[0], reverse=True)
+    rebuilt = work_line
+    for start, end, new_val in replacements:
+        rebuilt = rebuilt[:start] + new_val + rebuilt[end:]
+    return rebuilt + trailing_newline
 
 
 def parse_resource_dir(dirpath: Path) -> list[dict]:
-    results = []
+    results: list[dict] = []
     for fp in sorted(dirpath.glob("adv_*.txt")):
         for item in extract_resource_text(fp):
             item["file"] = fp.name
             results.append(item)
     return results
+
+
+__all__ = [
+    "CHAR_KEYS",
+    "TEXT_COMMANDS",
+    "build_resource_line",
+    "extract_resource_text",
+    "extract_resource_text_from_str",
+    "get_existing_resource_translation",
+    "is_plain_resource_field",
+    "normalize_resource_source",
+    "parse_adv_context",
+    "parse_resource_dir",
+    "resource_sources_equal",
+    "split_resource_translation",
+    "wrap_resource_translation",
+]
